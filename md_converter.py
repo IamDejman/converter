@@ -351,6 +351,9 @@ def md_to_docx_bytes(text: str) -> bytes:
     return buf.read()
 
 
+_FONT_DIR = Path(__file__).parent / "fonts"
+
+
 def md_to_pdf_bytes(text: str) -> bytes:
     """Convert markdown text to PDF, return raw bytes."""
     from fpdf import FPDF
@@ -359,14 +362,19 @@ def md_to_pdf_bytes(text: str) -> bytes:
     html = md_to_html(text)
 
     class _PdfBuilder(_HP):
-        """Minimal HTML→fpdf2 renderer for markdown-generated HTML."""
+        """Minimal HTML->fpdf2 renderer for markdown-generated HTML."""
 
         def __init__(self):
             super().__init__()
             self.pdf = FPDF()
             self.pdf.set_auto_page_break(auto=True, margin=20)
+            # Register Liberation Serif (Unicode-capable, metrically identical to Times New Roman)
+            self.pdf.add_font("Liberation", "", str(_FONT_DIR / "LiberationSerif-Regular.ttf"), uni=True)
+            self.pdf.add_font("Liberation", "B", str(_FONT_DIR / "LiberationSerif-Bold.ttf"), uni=True)
+            self.pdf.add_font("Liberation", "I", str(_FONT_DIR / "LiberationSerif-Italic.ttf"), uni=True)
+            self.pdf.add_font("Liberation", "BI", str(_FONT_DIR / "LiberationSerif-BoldItalic.ttf"), uni=True)
             self.pdf.add_page()
-            self.pdf.set_font("Times", size=12)
+            self.pdf.set_font("Liberation", size=12)
             self._bold = False
             self._italic = False
             self._in_pre = False
@@ -392,7 +400,7 @@ def md_to_pdf_bytes(text: str) -> bytes:
             if self._in_pre:
                 self.pdf.set_font("Courier", style=style, size=9)
             else:
-                self.pdf.set_font("Times", style=style, size=size)
+                self.pdf.set_font("Liberation", style=style, size=size)
 
         def handle_starttag(self, tag, attrs):
             if tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
@@ -420,7 +428,7 @@ def md_to_pdf_bytes(text: str) -> bytes:
                     kind = self._list_stack[-1]
                     if kind == "ul":
                         self.pdf.cell(10)
-                        self.pdf.cell(6, 6, "- ")
+                        self.pdf.cell(6, 6, "\u2022 ")
                     else:
                         self._list_counters[-1] += 1
                         self.pdf.cell(10)
@@ -501,13 +509,13 @@ def md_to_pdf_bytes(text: str) -> bytes:
             if num_cols == 0:
                 return
             col_w = (self.pdf.w - 20) / num_cols
-            self.pdf.set_font("Times", size=10)
+            self.pdf.set_font("Liberation", size=10)
             for r, row in enumerate(self._table_data):
                 for c, cell in enumerate(row):
                     if r == 0:
-                        self.pdf.set_font("Times", style="B", size=10)
+                        self.pdf.set_font("Liberation", style="B", size=10)
                     else:
-                        self.pdf.set_font("Times", size=10)
+                        self.pdf.set_font("Liberation", size=10)
                     self.pdf.cell(col_w, 7, cell, border=1)
                 self.pdf.ln()
             self.pdf.ln(4)

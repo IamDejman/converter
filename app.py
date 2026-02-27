@@ -1,29 +1,98 @@
 """
-Flask web UI for the converter suite.
+Flask web UI for Ayo's Converter suite.
 
-Supported conversions:
-  - JSON → Excel (.xlsx)
-  - Markdown → Word (.docx)
-  - Markdown → PDF (.pdf)
+Supported conversions (19 total):
+  Document/Text: JSON->Excel, Markdown->DOCX, Markdown->PDF, CSV->Excel, YAML->JSON, HTML->Markdown, PDF->Text
+  Data: XML->JSON, SQL->CSV, CSV->JSON
+  Image/Media: SVG->PNG (client), Image Resizer, Base64<->Image
+  Developer Tools: JSON Formatter (client), TOML->JSON/YAML, Cron Parser
+  Everyday Use: Unit Converter (client), Color Converter (client), Timestamp Tool
 """
 import io
+import csv as csv_mod
 import json
+import logging
 import tempfile
 from pathlib import Path
 
-from flask import Flask, request, send_file, jsonify
+from flask import Flask, request, send_file, jsonify, Response
+from flask_compress import Compress
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+import bleach
 
 from json_converter import load_json, json_to_dataframes, to_excel
 from md_converter import md_to_html, md_to_styled_html, md_to_docx_bytes, md_to_pdf_bytes
 
+# ---------------------------------------------------------------------------
+# App setup
+# ---------------------------------------------------------------------------
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024  # 10 MB
+
+Compress(app)
+limiter = Limiter(get_remote_address, app=app, default_limits=["200 per day", "50 per hour"], storage_uri="memory://")
+
+MAX_TEXT_INPUT = 5 * 1024 * 1024  # 5 MB for text inputs
+
+# Bleach allowlist for Markdown HTML sanitization
+_ALLOWED_TAGS = [
+    "h1", "h2", "h3", "h4", "h5", "h6", "p", "a", "em", "strong", "b", "i",
+    "code", "pre", "blockquote", "ul", "ol", "li", "table", "thead", "tbody",
+    "tr", "th", "td", "hr", "br", "img", "div", "span", "sup", "sub",
+]
+_ALLOWED_ATTRS = {
+    "a": ["href", "title"],
+    "img": ["src", "alt", "title"],
+    "code": ["class"],
+    "div": ["class"],
+    "span": ["class"],
+    "td": ["colspan", "rowspan"],
+    "th": ["colspan", "rowspan"],
+}
+
+
+def _validate_text(text: str | None, name: str = "input") -> str:
+    if not text or not text.strip():
+        raise ValueError(f"{name} is empty")
+    if len(text.encode("utf-8")) > MAX_TEXT_INPUT:
+        raise ValueError(f"{name} too large (max 5 MB)")
+    return text
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# HTML Template
+# ═══════════════════════════════════════════════════════════════════════════
 
 HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Ayo's Converter</title>
+  <title>Ayo's Converter - Free Online File Format Converter</title>
+  <meta name="description" content="Free online converter for JSON, CSV, YAML, XML, Markdown, PDF, images, and more. Convert between 19+ file formats instantly. No signup required." />
+  <meta name="keywords" content="file converter, JSON to Excel, CSV to JSON, YAML to JSON, markdown to PDF, online converter, free converter" />
+  <meta property="og:title" content="Ayo's Converter - Free Online File Format Converter" />
+  <meta property="og:description" content="Convert between 19+ file formats instantly. JSON, CSV, YAML, XML, Markdown, PDF, images and more." />
+  <meta property="og:type" content="website" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="Ayo's Converter" />
+  <meta name="twitter:description" content="Convert between 19+ file formats instantly." />
+  <link rel="canonical" href="/" />
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Ayo's Converter",
+    "applicationCategory": "UtilitiesApplication",
+    "operatingSystem": "Web",
+    "description": "Free online converter for 19+ file formats including JSON, CSV, YAML, XML, Markdown, PDF, images and more.",
+    "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}
+  }
+  </script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -32,879 +101,1661 @@ HTML = r"""<!DOCTYPE html>
       background: #ffffff;
       color: #1f2328;
       min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 40px 16px 80px;
     }
 
-    header {
+    /* ── Layout ────────────────────────────────────────────── */
+    .app-header {
       text-align: center;
-      margin-bottom: 36px;
+      padding: 24px 16px 16px;
+      border-bottom: 1px solid #d1d9e0;
     }
-    header h1 { font-size: 2rem; font-weight: 700; letter-spacing: -0.5px; color: #1f2328; }
-    header p  { margin-top: 8px; color: #656d76; font-size: 0.95rem; }
+    .app-header h1 { font-size: 1.6rem; font-weight: 700; letter-spacing: -0.5px; }
+    .app-header p  { margin-top: 4px; color: #656d76; font-size: 0.85rem; }
 
-    /* ── Converter tabs ─────────────────────────────────────── */
-    .converter-tabs {
-      display: flex;
-      gap: 6px;
-      margin-bottom: 24px;
-      flex-wrap: wrap;
-      justify-content: center;
+    .app-layout {
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      min-height: calc(100vh - 80px);
     }
-    .converter-tab {
-      padding: 8px 20px;
-      border-radius: 8px;
-      font-size: 0.88rem;
-      font-weight: 600;
+
+    /* ── Sidebar ───────────────────────────────────────────── */
+    .sidebar {
       background: #f6f8fa;
-      color: #656d76;
-      border: 1px solid #d1d9e0;
-      cursor: pointer;
-      transition: background 0.15s, color 0.15s, border-color 0.15s;
+      border-right: 1px solid #d1d9e0;
+      padding: 16px 0;
+      overflow-y: auto;
     }
-    .converter-tab:hover { background: #eaeef2; color: #1f2328; }
-    .converter-tab.active {
-      background: #0969da;
-      color: #fff;
-      border-color: #0969da;
+    .sidebar-category { margin-bottom: 8px; }
+    .sidebar-category h3 {
+      font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.5px; color: #656d76; padding: 6px 16px;
+    }
+    .sidebar-item {
+      display: block; padding: 7px 16px 7px 24px; cursor: pointer;
+      font-size: 0.85rem; color: #1f2328; text-decoration: none;
+      border-left: 3px solid transparent;
+    }
+    .sidebar-item:hover { background: #eaeef2; }
+    .sidebar-item.active { background: #ddf4ff; border-left-color: #0969da; color: #0969da; font-weight: 600; }
+
+    .mobile-select { display: none; width: 100%; padding: 10px; font-size: 1rem; font-family: inherit; margin-bottom: 12px; border: 1px solid #d1d9e0; border-radius: 8px; }
+
+    /* ── Content ───────────────────────────────────────────── */
+    .content {
+      padding: 24px 32px 80px;
+      max-width: 900px;
     }
 
-    .card {
-      background: #f6f8fa;
-      border: 1px solid #d1d9e0;
-      border-radius: 12px;
-      padding: 28px;
-      width: 100%;
-      max-width: 820px;
-    }
-
-    label {
-      display: block;
-      font-size: 0.82rem;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      color: #656d76;
-      margin-bottom: 8px;
-    }
-
-    textarea {
-      width: 100%;
-      height: 320px;
-      background: #ffffff;
-      border: 1px solid #d1d9e0;
-      border-radius: 8px;
-      color: #1f2328;
-      font-family: "Times New Roman", Times, serif;
-      font-size: 0.85rem;
-      line-height: 1.6;
-      padding: 14px;
-      resize: vertical;
-      outline: none;
-      transition: border-color 0.15s;
-    }
-    textarea:focus { border-color: #0969da; }
-    textarea.error  { border-color: #cf222e; }
-
-    .row {
-      display: flex;
-      gap: 12px;
-      margin-top: 18px;
-      flex-wrap: wrap;
-      align-items: flex-end;
-    }
-
-    .field { display: flex; flex-direction: column; gap: 6px; }
-    .field input[type="text"] {
-      background: #ffffff;
-      border: 1px solid #d1d9e0;
-      border-radius: 6px;
-      color: #1f2328;
-      font-size: 0.88rem;
-      padding: 8px 12px;
-      outline: none;
-      transition: border-color 0.15s;
-      min-width: 160px;
-    }
-    .field input[type="text"]:focus { border-color: #0969da; }
-
-    .toggle-group {
-      display: flex;
-      gap: 0;
-      border: 1px solid #d1d9e0;
-      border-radius: 6px;
-      overflow: hidden;
-      height: 36px;
-    }
-    .toggle-group input[type="radio"] { display: none; }
-    .toggle-group label {
-      display: flex;
-      align-items: center;
-      padding: 0 16px;
-      font-size: 0.82rem;
-      font-weight: 500;
-      text-transform: none;
-      letter-spacing: 0;
-      color: #656d76;
-      cursor: pointer;
-      background: #ffffff;
-      transition: background 0.12s, color 0.12s;
-      margin: 0;
-    }
-    .toggle-group input[type="radio"]:checked + label {
-      background: #0969da;
-      color: #fff;
-    }
-
-    .spacer { flex: 1; }
-
-    button.primary-btn {
-      height: 36px;
-      padding: 0 24px;
-      background: #1f883d;
-      color: #fff;
-      border: none;
-      border-radius: 6px;
-      font-size: 0.9rem;
-      font-weight: 600;
-      cursor: pointer;
-      transition: background 0.15s, opacity 0.15s;
-      white-space: nowrap;
-    }
-    button.primary-btn:hover { background: #1a7f37; }
-    button.primary-btn:disabled { opacity: 0.5; cursor: default; }
-
-    /* Status / error bar */
-    .status-bar {
-      margin-top: 14px;
-      font-size: 0.85rem;
-      min-height: 20px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .status-bar.ok   { color: #1a7f37; }
-    .status-bar.err  { color: #cf222e; }
-    .status-bar.info { color: #656d76; }
-
-    /* Preview table (JSON) */
-    #jsonPreview {
-      margin-top: 24px;
-      display: none;
-    }
-    #jsonPreview h2, #mdPreview h2 {
-      font-size: 0.82rem;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      color: #656d76;
-      margin-bottom: 10px;
-    }
-    .sheet-tabs {
-      display: flex;
-      gap: 4px;
-      margin-bottom: 8px;
-      flex-wrap: wrap;
-    }
-    .sheet-tab {
-      padding: 4px 14px;
-      border-radius: 20px;
-      font-size: 0.78rem;
-      font-weight: 600;
-      background: #eaeef2;
-      color: #656d76;
-      border: 1px solid #d1d9e0;
-      cursor: pointer;
-      transition: background 0.12s;
-    }
-    .sheet-tab.active { background: #0969da; color: #fff; border-color: #0969da; }
-
-    .table-wrap {
-      overflow-x: auto;
-      border: 1px solid #d1d9e0;
-      border-radius: 8px;
-    }
-    table {
-      border-collapse: collapse;
-      width: 100%;
-      font-size: 0.82rem;
-    }
-    th {
-      background: #f6f8fa;
-      color: #0969da;
-      font-weight: 700;
-      padding: 10px 14px;
-      text-align: left;
-      white-space: nowrap;
-      border-bottom: 2px solid #0969da30;
-      font-size: 0.78rem;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }
-    td {
-      padding: 8px 14px;
-      border-bottom: 1px solid #eaeef2;
-      color: #1f2328;
-      white-space: nowrap;
-      max-width: 260px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    tr:last-child td { border-bottom: none; }
-    tr:hover td { background: #f6f8fa; }
-
-    .row-count {
-      margin-top: 6px;
-      font-size: 0.78rem;
-      color: #656d76;
-    }
-
-    /* Download buttons */
-    .download-btn {
-      height: 36px;
-      padding: 0 22px;
-      background: #ffffff;
-      color: #0969da;
-      border: 1px solid #0969da;
-      border-radius: 6px;
-      font-size: 0.88rem;
-      font-weight: 600;
-      cursor: pointer;
-      transition: background 0.15s;
-      display: none;
-    }
-    .download-btn:hover { background: #f6f8fa; }
-
-    .download-row {
-      display: flex;
-      gap: 10px;
-      margin-top: 16px;
-      flex-wrap: wrap;
-    }
-
-    /* Markdown preview */
-    #mdPreview {
-      margin-top: 24px;
-      display: none;
-    }
-    .md-rendered {
-      background: #fff;
-      border: 1px solid #d1d9e0;
-      border-radius: 8px;
-      padding: 24px 28px;
-      color: #1f2328;
-      font-family: "Times New Roman", Times, serif;
-      font-size: 14px;
-      line-height: 1.7;
-      overflow-x: auto;
-    }
-    .md-rendered h1, .md-rendered h2, .md-rendered h3,
-    .md-rendered h4, .md-rendered h5, .md-rendered h6 {
-      margin-top: 1.2em; margin-bottom: 0.5em; font-weight: 600; color: #1f2328;
-    }
-    .md-rendered h1 { font-size: 1.8em; border-bottom: 1px solid #d1d9e0; padding-bottom: 0.3em; }
-    .md-rendered h2 { font-size: 1.4em; border-bottom: 1px solid #d1d9e0; padding-bottom: 0.3em; }
-    .md-rendered h3 { font-size: 1.15em; }
-    .md-rendered p { margin: 0 0 14px; }
-    .md-rendered a { color: #0969da; }
-    .md-rendered code {
-      background: #eff1f3; padding: 2px 5px; border-radius: 4px;
-      font-family: "Times New Roman", Times, serif; font-size: 0.88em;
-    }
-    .md-rendered pre {
-      background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 6px;
-      padding: 14px; overflow-x: auto; margin: 0 0 14px;
-    }
-    .md-rendered pre code { background: none; padding: 0; }
-    .md-rendered blockquote {
-      border-left: 4px solid #d1d9e0; padding: 0 14px; color: #656d76; margin: 0 0 14px;
-    }
-    .md-rendered table { border-collapse: collapse; width: 100%; margin: 0 0 14px; }
-    .md-rendered th, .md-rendered td {
-      border: 1px solid #d1d9e0; padding: 8px 12px; text-align: left;
-      color: #1f2328; background: transparent; text-transform: none;
-      font-size: 14px; letter-spacing: normal; font-weight: normal;
-      white-space: normal; max-width: none; overflow: visible;
-    }
-    .md-rendered th { background: #f6f8fa; font-weight: 600; }
-    .md-rendered ul, .md-rendered ol { margin: 0 0 14px; padding-left: 2em; }
-    .md-rendered li { margin-bottom: 3px; color: #1f2328; }
-    .md-rendered hr { border: none; border-top: 2px solid #d1d9e0; margin: 20px 0; }
-
-    /* Spinner */
-    .spinner {
-      width: 14px; height: 14px;
-      border: 2px solid #d1d9e0;
-      border-top-color: #0969da;
-      border-radius: 50%;
-      animation: spin 0.6s linear infinite;
-      display: none;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    /* File upload */
-    .file-upload-row {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      margin-bottom: 10px;
-    }
-    .file-upload-row label.upload-label {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 6px 14px;
-      background: #eaeef2;
-      border: 1px solid #d1d9e0;
-      border-radius: 6px;
-      font-size: 0.82rem;
-      font-weight: 600;
-      color: #1f2328;
-      cursor: pointer;
-      transition: background 0.15s, border-color 0.15s;
-      text-transform: none;
-      letter-spacing: 0;
-      margin: 0;
-    }
-    .file-upload-row label.upload-label:hover {
-      background: #d1d9e0;
-      border-color: #0969da;
-    }
-    .file-upload-row input[type="file"] { display: none; }
-    .file-upload-row .file-name {
-      font-size: 0.82rem;
-      color: #656d76;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      max-width: 300px;
-    }
-
-    /* Panel visibility */
     .panel { display: none; }
     .panel.active { display: block; }
+    .panel h2 { font-size: 1.3rem; margin-bottom: 16px; font-weight: 600; }
+
+    textarea, input[type="text"], input[type="number"], select {
+      font-family: "Times New Roman", Times, serif;
+      font-size: 0.95rem;
+      border: 1px solid #d1d9e0;
+      border-radius: 8px;
+      padding: 10px 12px;
+      width: 100%;
+      background: #fff;
+      color: #1f2328;
+    }
+    textarea { resize: vertical; min-height: 180px; }
+    textarea:focus, input:focus, select:focus { outline: none; border-color: #0969da; box-shadow: 0 0 0 3px rgba(9,105,218,.15); }
+
+    .options-row { display: flex; gap: 12px; flex-wrap: wrap; margin: 12px 0; align-items: end; }
+    .options-row label { font-size: 0.8rem; color: #656d76; display: block; margin-bottom: 4px; }
+    .options-row input, .options-row select { width: auto; min-width: 100px; }
+
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 9px 20px; border: none; border-radius: 8px;
+      font-family: inherit; font-size: 0.9rem; font-weight: 600;
+      cursor: pointer; transition: background 0.15s;
+    }
+    .btn-primary { background: #0969da; color: #fff; }
+    .btn-primary:hover { background: #0860ca; }
+    .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+    .btn-green { background: #1a7f37; color: #fff; margin-top: 8px; }
+    .btn-green:hover { background: #166b2e; }
+    .btn-secondary { background: #eaeef2; color: #1f2328; }
+    .btn-secondary:hover { background: #d1d9e0; }
+    .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+
+    .status { margin: 10px 0; font-size: 0.85rem; min-height: 1.2em; }
+    .status.ok { color: #1a7f37; } .status.err { color: #cf222e; } .status.info { color: #656d76; }
+
+    .spinner { display: none; width: 18px; height: 18px; border: 3px solid #d1d9e0; border-top-color: #0969da; border-radius: 50%; animation: spin .6s linear infinite; margin-left: 8px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .preview { margin-top: 16px; }
+    .preview pre, .output-box {
+      background: #f6f8fa; border: 1px solid #d1d9e0; border-radius: 8px;
+      padding: 14px; font-size: 0.85rem; overflow-x: auto; white-space: pre-wrap;
+      word-break: break-word; max-height: 500px; overflow-y: auto;
+      font-family: "Courier New", monospace;
+    }
+
+    /* ── JSON preview table ────────────────────────────────── */
+    .sheet-tabs { display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap; }
+    .sheet-tab { padding: 4px 14px; border-radius: 6px 6px 0 0; cursor: pointer; font-size: 0.82rem; background: #eaeef2; border: 1px solid #d1d9e0; border-bottom: none; }
+    .sheet-tab.active { background: #fff; font-weight: 600; color: #0969da; }
+    .preview-table-wrap { overflow-x: auto; max-height: 420px; overflow-y: auto; border: 1px solid #d1d9e0; border-radius: 0 0 8px 8px; }
+    table.preview-table { border-collapse: collapse; width: 100%; font-size: 0.82rem; }
+    table.preview-table th, table.preview-table td { border: 1px solid #d1d9e0; padding: 6px 10px; text-align: left; white-space: nowrap; }
+    table.preview-table th { background: #0969da; color: #fff; position: sticky; top: 0; }
+    table.preview-table tr:hover td { background: #f6f8fa; }
+
+    /* ── Markdown preview ──────────────────────────────────── */
+    .md-rendered { padding: 16px; border: 1px solid #d1d9e0; border-radius: 8px; background: #fff; max-height: 500px; overflow-y: auto; }
+    .md-rendered h1,.md-rendered h2,.md-rendered h3,.md-rendered h4,.md-rendered h5,.md-rendered h6 { margin: 1em 0 0.5em; font-weight: 600; }
+    .md-rendered h1 { font-size: 1.6em; border-bottom: 1px solid #d1d9e0; padding-bottom: 0.3em; }
+    .md-rendered h2 { font-size: 1.3em; border-bottom: 1px solid #d1d9e0; padding-bottom: 0.3em; }
+    .md-rendered p { margin: 0 0 12px; } .md-rendered ul,.md-rendered ol { margin: 0 0 12px; padding-left: 2em; }
+    .md-rendered pre { background: #f6f8fa; padding: 12px; border-radius: 6px; overflow-x: auto; }
+    .md-rendered code { background: #eff1f3; padding: 1px 5px; border-radius: 4px; font-family: "Courier New", monospace; font-size: 0.88em; }
+    .md-rendered pre code { background: none; padding: 0; }
+    .md-rendered table { border-collapse: collapse; margin: 0 0 12px; }
+    .md-rendered th,.md-rendered td { border: 1px solid #d1d9e0; padding: 6px 12px; }
+    .md-rendered th { background: #f6f8fa; font-weight: 600; }
+    .md-rendered blockquote { border-left: 4px solid #d1d9e0; padding: 0 14px; color: #656d76; margin: 0 0 12px; }
+
+    /* ── Color swatch ──────────────────────────────────────── */
+    .color-swatch { width: 100%; height: 80px; border-radius: 8px; border: 1px solid #d1d9e0; margin: 12px 0; }
+    .color-inputs { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+    .color-inputs div label { font-size: 0.8rem; color: #656d76; display: block; margin-bottom: 4px; }
+
+    /* ── File upload ───────────────────────────────────────── */
+    .file-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+    .file-row input[type="file"] { display: none; }
+    .file-label { padding: 7px 16px; border-radius: 8px; background: #eaeef2; cursor: pointer; font-size: 0.85rem; font-weight: 500; }
+    .file-label:hover { background: #d1d9e0; }
+    .file-name { font-size: 0.82rem; color: #656d76; }
+
+    /* ── Image preview ─────────────────────────────────────── */
+    .img-preview { max-width: 100%; max-height: 300px; border: 1px solid #d1d9e0; border-radius: 8px; margin: 12px 0; }
+
+    /* ── Footer ────────────────────────────────────────────── */
+    footer { text-align: center; padding: 20px; font-size: 0.8rem; color: #8b949e; border-top: 1px solid #d1d9e0; }
+
+    /* ── Responsive ────────────────────────────────────────── */
+    @media (max-width: 768px) {
+      .app-layout { grid-template-columns: 1fr; }
+      .sidebar { display: none; }
+      .mobile-select { display: block; }
+      .content { padding: 16px; }
+      .color-inputs { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
 
-<header>
+<header class="app-header">
   <h1>Ayo's Converter</h1>
-  <p>Convert between formats — paste, preview, download</p>
+  <p>19 free online converters &mdash; no signup required</p>
 </header>
 
-<div class="converter-tabs">
-  <div class="converter-tab active" onclick="switchConverter('json')">JSON → Excel</div>
-  <div class="converter-tab" onclick="switchConverter('md-docx')">Markdown → DOCX</div>
-  <div class="converter-tab" onclick="switchConverter('md-pdf')">Markdown → PDF</div>
-</div>
+<!-- Mobile dropdown -->
+<select class="mobile-select" onchange="switchConverter(this.value)">
+  <optgroup label="Document / Text">
+    <option value="json" selected>JSON &rarr; Excel</option>
+    <option value="md-docx">Markdown &rarr; DOCX</option>
+    <option value="md-pdf">Markdown &rarr; PDF</option>
+    <option value="csv-excel">CSV &rarr; Excel</option>
+    <option value="yaml-json">YAML &rarr; JSON</option>
+    <option value="html-md">HTML &rarr; Markdown</option>
+    <option value="pdf-text">PDF &rarr; Text</option>
+  </optgroup>
+  <optgroup label="Data">
+    <option value="xml-json">XML &rarr; JSON</option>
+    <option value="sql-csv">SQL &rarr; CSV</option>
+    <option value="csv-json">CSV &rarr; JSON</option>
+  </optgroup>
+  <optgroup label="Image / Media">
+    <option value="svg-png">SVG &rarr; PNG</option>
+    <option value="image-resize">Image Resizer</option>
+    <option value="base64-image">Base64 &harr; Image</option>
+  </optgroup>
+  <optgroup label="Developer Tools">
+    <option value="json-format">JSON Formatter</option>
+    <option value="toml-json">TOML &rarr; JSON/YAML</option>
+    <option value="cron-human">Cron Parser</option>
+  </optgroup>
+  <optgroup label="Everyday Use">
+    <option value="unit">Unit Converter</option>
+    <option value="color">Color Converter</option>
+    <option value="timestamp">Timestamp Tool</option>
+  </optgroup>
+</select>
+
+<main class="app-layout">
+<nav class="sidebar">
+  <div class="sidebar-category"><h3>Document / Text</h3>
+    <a class="sidebar-item active" onclick="switchConverter('json')">JSON &rarr; Excel</a>
+    <a class="sidebar-item" onclick="switchConverter('md-docx')">Markdown &rarr; DOCX</a>
+    <a class="sidebar-item" onclick="switchConverter('md-pdf')">Markdown &rarr; PDF</a>
+    <a class="sidebar-item" onclick="switchConverter('csv-excel')">CSV &rarr; Excel</a>
+    <a class="sidebar-item" onclick="switchConverter('yaml-json')">YAML &rarr; JSON</a>
+    <a class="sidebar-item" onclick="switchConverter('html-md')">HTML &rarr; Markdown</a>
+    <a class="sidebar-item" onclick="switchConverter('pdf-text')">PDF &rarr; Text</a>
+  </div>
+  <div class="sidebar-category"><h3>Data</h3>
+    <a class="sidebar-item" onclick="switchConverter('xml-json')">XML &rarr; JSON</a>
+    <a class="sidebar-item" onclick="switchConverter('sql-csv')">SQL &rarr; CSV</a>
+    <a class="sidebar-item" onclick="switchConverter('csv-json')">CSV &rarr; JSON</a>
+  </div>
+  <div class="sidebar-category"><h3>Image / Media</h3>
+    <a class="sidebar-item" onclick="switchConverter('svg-png')">SVG &rarr; PNG</a>
+    <a class="sidebar-item" onclick="switchConverter('image-resize')">Image Resizer</a>
+    <a class="sidebar-item" onclick="switchConverter('base64-image')">Base64 &harr; Image</a>
+  </div>
+  <div class="sidebar-category"><h3>Developer Tools</h3>
+    <a class="sidebar-item" onclick="switchConverter('json-format')">JSON Formatter</a>
+    <a class="sidebar-item" onclick="switchConverter('toml-json')">TOML &rarr; JSON/YAML</a>
+    <a class="sidebar-item" onclick="switchConverter('cron-human')">Cron Parser</a>
+  </div>
+  <div class="sidebar-category"><h3>Everyday Use</h3>
+    <a class="sidebar-item" onclick="switchConverter('unit')">Unit Converter</a>
+    <a class="sidebar-item" onclick="switchConverter('color')">Color Converter</a>
+    <a class="sidebar-item" onclick="switchConverter('timestamp')">Timestamp Tool</a>
+  </div>
+</nav>
+
+<section class="content">
 
 <!-- ═══════════════════ JSON → Excel ═══════════════════ -->
-<div class="card panel active" id="panel-json">
-  <div class="file-upload-row">
-    <label for="jsonInput">JSON Input</label>
-    <label class="upload-label" for="jsonFileInput">&#128206; Attach .json</label>
-    <input type="file" id="jsonFileInput" accept=".json,application/json" onchange="loadFile(this, 'jsonInput')" />
+<div class="panel active" id="panel-json">
+  <h2>JSON &rarr; Excel</h2>
+  <div class="file-row">
+    <input type="file" id="jsonFile" accept=".json" onchange="loadFile(this,'jsonInput')"/>
+    <label for="jsonFile" class="file-label">Attach .json</label>
     <span class="file-name" id="jsonFileName"></span>
   </div>
-  <textarea id="jsonInput" placeholder='Paste your JSON here…&#10;&#10;Arrays, objects, nested structures — all supported.'></textarea>
-
-  <div class="row">
-    <div class="field">
-      <label>Flatten nested keys</label>
-      <div class="toggle-group">
-        <input type="radio" name="flatten" id="flatOn"  value="true"  checked />
-        <label for="flatOn">On</label>
-        <input type="radio" name="flatten" id="flatOff" value="false" />
-        <label for="flatOff">Off</label>
-      </div>
-    </div>
-
-    <div class="field">
-      <label>Strip common prefix</label>
-      <div class="toggle-group">
-        <input type="radio" name="strip_prefix" id="stripOn"  value="true"  checked />
-        <label for="stripOn">On</label>
-        <input type="radio" name="strip_prefix" id="stripOff" value="false" />
-        <label for="stripOff">Off</label>
-      </div>
-    </div>
-
-    <div class="field">
-      <label>Separator</label>
-      <input type="text" id="sepInput" value="." maxlength="5" style="width:70px;text-align:center;" />
-    </div>
-
-    <div class="field">
-      <label>Sheet name (default)</label>
-      <input type="text" id="sheetName" value="Sheet1" />
-    </div>
-
-    <div class="spacer"></div>
-    <button class="primary-btn" id="jsonConvertBtn" onclick="jsonConvert()">Convert</button>
+  <textarea id="jsonInput" placeholder='Paste JSON here...'></textarea>
+  <div class="options-row">
+    <div><label>Flatten</label><select id="jsonFlatten"><option value="1">Yes</option><option value="0">No</option></select></div>
+    <div><label>Strip prefix</label><select id="jsonStripPrefix"><option value="1">Yes</option><option value="0">No</option></select></div>
+    <div><label>Separator</label><input type="text" id="jsonSep" value="." maxlength="5" style="width:60px"/></div>
+    <div><label>Sheet name</label><input type="text" id="jsonSheetName" value="Sheet1" style="width:120px"/></div>
   </div>
-
-  <div id="jsonStatus" class="status-bar info">
-    <div class="spinner" id="jsonSpinner"></div>
-    <span id="jsonStatusText">Paste JSON and click Convert.</span>
+  <div class="btn-row">
+    <button class="btn btn-primary" id="jsonConvertBtn" onclick="jsonConvert()">Convert &amp; Preview</button>
+    <span class="spinner" id="jsonSpinner"></span>
   </div>
-
-  <div id="jsonPreview">
-    <div class="download-row">
-      <button class="download-btn" id="jsonDownloadBtnTop" onclick="jsonDownload()">⬇ Download .xlsx</button>
-    </div>
-    <h2>Preview</h2>
+  <div class="status" id="jsonStatus"></div>
+  <div class="preview" id="jsonPreview" style="display:none">
+    <button class="btn btn-green" onclick="jsonDownload()">Download .xlsx</button>
     <div class="sheet-tabs" id="sheetTabs"></div>
-    <div class="table-wrap">
-      <table id="previewTable"><thead></thead><tbody></tbody></table>
-    </div>
-    <div class="row-count" id="rowCount"></div>
-    <div class="download-row">
-      <button class="download-btn" id="jsonDownloadBtn" onclick="jsonDownload()">⬇ Download .xlsx</button>
-    </div>
+    <div class="preview-table-wrap"><table class="preview-table" id="previewTable"></table></div>
+    <button class="btn btn-green" onclick="jsonDownload()">Download .xlsx</button>
   </div>
 </div>
 
 <!-- ═══════════════════ Markdown → DOCX ═══════════════════ -->
-<div class="card panel" id="panel-md-docx">
-  <div class="file-upload-row">
-    <label for="mdDocxInput">Markdown Input</label>
-    <label class="upload-label" for="mdDocxFileInput">&#128206; Attach .md</label>
-    <input type="file" id="mdDocxFileInput" accept=".md,.markdown,text/markdown,text/plain" onchange="loadFile(this, 'mdDocxInput')" />
+<div class="panel" id="panel-md-docx">
+  <h2>Markdown &rarr; DOCX</h2>
+  <div class="file-row">
+    <input type="file" id="mdDocxFile" accept=".md,.markdown,.txt" onchange="loadFile(this,'mdDocxInput')"/>
+    <label for="mdDocxFile" class="file-label">Attach .md</label>
     <span class="file-name" id="mdDocxFileName"></span>
   </div>
-  <textarea id="mdDocxInput" placeholder='# Hello World&#10;&#10;Write or paste your **Markdown** here…&#10;&#10;- Lists&#10;- Tables&#10;- Code blocks&#10;&#10;All supported.'></textarea>
-
-  <div class="row">
-    <div class="spacer"></div>
-    <button class="primary-btn" id="mdDocxConvertBtn" onclick="mdConvert('docx')">Convert</button>
+  <textarea id="mdDocxInput" placeholder="Paste Markdown here..."></textarea>
+  <div class="btn-row">
+    <button class="btn btn-primary" id="mdDocxConvertBtn" onclick="mdConvert('docx')">Convert &amp; Preview</button>
+    <span class="spinner" id="mdDocxSpinner"></span>
   </div>
-
-  <div id="mdDocxStatus" class="status-bar info">
-    <div class="spinner" id="mdDocxSpinner"></div>
-    <span id="mdDocxStatusText">Write Markdown and click Convert.</span>
-  </div>
-
-  <div id="mdDocxPreview">
-    <div class="download-row">
-      <button class="download-btn" id="mdDocxDownloadBtnTop" onclick="mdDownload('docx')">⬇ Download .docx</button>
-    </div>
-    <h2>Preview</h2>
+  <div class="status" id="mdDocxStatus"></div>
+  <div class="preview" id="mdDocxPreview" style="display:none">
+    <button class="btn btn-green" onclick="mdDownload('docx')">Download .docx</button>
     <div class="md-rendered" id="mdDocxRendered"></div>
-    <div class="download-row">
-      <button class="download-btn" id="mdDocxDownloadBtn" onclick="mdDownload('docx')">⬇ Download .docx</button>
-    </div>
+    <button class="btn btn-green" onclick="mdDownload('docx')">Download .docx</button>
   </div>
 </div>
 
 <!-- ═══════════════════ Markdown → PDF ═══════════════════ -->
-<div class="card panel" id="panel-md-pdf">
-  <div class="file-upload-row">
-    <label for="mdPdfInput">Markdown Input</label>
-    <label class="upload-label" for="mdPdfFileInput">&#128206; Attach .md</label>
-    <input type="file" id="mdPdfFileInput" accept=".md,.markdown,text/markdown,text/plain" onchange="loadFile(this, 'mdPdfInput')" />
+<div class="panel" id="panel-md-pdf">
+  <h2>Markdown &rarr; PDF</h2>
+  <div class="file-row">
+    <input type="file" id="mdPdfFile" accept=".md,.markdown,.txt" onchange="loadFile(this,'mdPdfInput')"/>
+    <label for="mdPdfFile" class="file-label">Attach .md</label>
     <span class="file-name" id="mdPdfFileName"></span>
   </div>
-  <textarea id="mdPdfInput" placeholder='# Hello World&#10;&#10;Write or paste your **Markdown** here…&#10;&#10;- Lists&#10;- Tables&#10;- Code blocks&#10;&#10;All supported.'></textarea>
-
-  <div class="row">
-    <div class="spacer"></div>
-    <button class="primary-btn" id="mdPdfConvertBtn" onclick="mdConvert('pdf')">Convert</button>
+  <textarea id="mdPdfInput" placeholder="Paste Markdown here..."></textarea>
+  <div class="btn-row">
+    <button class="btn btn-primary" id="mdPdfConvertBtn" onclick="mdConvert('pdf')">Convert &amp; Preview</button>
+    <span class="spinner" id="mdPdfSpinner"></span>
   </div>
-
-  <div id="mdPdfStatus" class="status-bar info">
-    <div class="spinner" id="mdPdfSpinner"></div>
-    <span id="mdPdfStatusText">Write Markdown and click Convert.</span>
-  </div>
-
-  <div id="mdPdfPreview">
-    <div class="download-row">
-      <button class="download-btn" id="mdPdfDownloadBtnTop" onclick="mdDownload('pdf')">⬇ Download .pdf</button>
-    </div>
-    <h2>Preview</h2>
+  <div class="status" id="mdPdfStatus"></div>
+  <div class="preview" id="mdPdfPreview" style="display:none">
+    <button class="btn btn-green" onclick="mdDownload('pdf')">Download .pdf</button>
     <div class="md-rendered" id="mdPdfRendered"></div>
-    <div class="download-row">
-      <button class="download-btn" id="mdPdfDownloadBtn" onclick="mdDownload('pdf')">⬇ Download .pdf</button>
-    </div>
+    <button class="btn btn-green" onclick="mdDownload('pdf')">Download .pdf</button>
   </div>
 </div>
 
+<!-- ═══════════════════ CSV → Excel ═══════════════════ -->
+<div class="panel" id="panel-csv-excel">
+  <h2>CSV &rarr; Excel</h2>
+  <div class="file-row">
+    <input type="file" id="csvExcelFile" accept=".csv,.tsv,.txt" onchange="loadFile(this,'csvExcelInput')"/>
+    <label for="csvExcelFile" class="file-label">Attach .csv</label>
+    <span class="file-name" id="csvExcelFileName"></span>
+  </div>
+  <textarea id="csvExcelInput" placeholder="Paste CSV data here..."></textarea>
+  <div class="options-row">
+    <div><label>Delimiter</label><select id="csvDelimiter"><option value=",">,</option><option value="&#9;">Tab</option><option value=";">;</option><option value="|">|</option></select></div>
+  </div>
+  <div class="btn-row">
+    <button class="btn btn-primary" onclick="csvExcelConvert()">Convert &amp; Preview</button>
+    <span class="spinner" id="csvExcelSpinner"></span>
+  </div>
+  <div class="status" id="csvExcelStatus"></div>
+  <div class="preview" id="csvExcelPreview" style="display:none">
+    <button class="btn btn-green" onclick="csvExcelDownload()">Download .xlsx</button>
+    <div class="preview-table-wrap"><table class="preview-table" id="csvPreviewTable"></table></div>
+    <button class="btn btn-green" onclick="csvExcelDownload()">Download .xlsx</button>
+  </div>
+</div>
+
+<!-- ═══════════════════ YAML → JSON ═══════════════════ -->
+<div class="panel" id="panel-yaml-json">
+  <h2>YAML &rarr; JSON</h2>
+  <div class="file-row">
+    <input type="file" id="yamlFile" accept=".yaml,.yml,.txt" onchange="loadFile(this,'yamlInput')"/>
+    <label for="yamlFile" class="file-label">Attach .yaml</label>
+    <span class="file-name" id="yamlFileName"></span>
+  </div>
+  <textarea id="yamlInput" placeholder="Paste YAML here..."></textarea>
+  <div class="btn-row">
+    <button class="btn btn-primary" onclick="yamlConvert()">Convert</button>
+    <span class="spinner" id="yamlSpinner"></span>
+  </div>
+  <div class="status" id="yamlStatus"></div>
+  <div class="preview" id="yamlPreview" style="display:none">
+    <button class="btn btn-secondary" onclick="copyText('yamlOutput')">Copy JSON</button>
+    <pre class="output-box" id="yamlOutput"></pre>
+  </div>
+</div>
+
+<!-- ═══════════════════ HTML → Markdown ═══════════════════ -->
+<div class="panel" id="panel-html-md">
+  <h2>HTML &rarr; Markdown</h2>
+  <div class="file-row">
+    <input type="file" id="htmlMdFile" accept=".html,.htm,.txt" onchange="loadFile(this,'htmlMdInput')"/>
+    <label for="htmlMdFile" class="file-label">Attach .html</label>
+    <span class="file-name" id="htmlMdFileName"></span>
+  </div>
+  <textarea id="htmlMdInput" placeholder="Paste HTML here..."></textarea>
+  <div class="btn-row">
+    <button class="btn btn-primary" onclick="htmlMdConvert()">Convert</button>
+    <span class="spinner" id="htmlMdSpinner"></span>
+  </div>
+  <div class="status" id="htmlMdStatus"></div>
+  <div class="preview" id="htmlMdPreview" style="display:none">
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="copyText('htmlMdOutput')">Copy Markdown</button>
+      <button class="btn btn-green" onclick="downloadText('htmlMdOutput','converted.md','text/markdown')">Download .md</button>
+    </div>
+    <pre class="output-box" id="htmlMdOutput"></pre>
+  </div>
+</div>
+
+<!-- ═══════════════════ PDF → Text ═══════════════════ -->
+<div class="panel" id="panel-pdf-text">
+  <h2>PDF &rarr; Text</h2>
+  <div class="file-row">
+    <input type="file" id="pdfFile" accept=".pdf"/>
+    <label for="pdfFile" class="file-label">Choose PDF file</label>
+    <span class="file-name" id="pdfFileName"></span>
+  </div>
+  <div class="btn-row">
+    <button class="btn btn-primary" onclick="pdfExtract()">Extract Text</button>
+    <span class="spinner" id="pdfSpinner"></span>
+  </div>
+  <div class="status" id="pdfStatus"></div>
+  <div class="preview" id="pdfPreview" style="display:none">
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="copyText('pdfOutput')">Copy Text</button>
+      <button class="btn btn-green" onclick="downloadText('pdfOutput','extracted.txt','text/plain')">Download .txt</button>
+    </div>
+    <pre class="output-box" id="pdfOutput"></pre>
+  </div>
+</div>
+
+<!-- ═══════════════════ XML → JSON ═══════════════════ -->
+<div class="panel" id="panel-xml-json">
+  <h2>XML &rarr; JSON</h2>
+  <div class="file-row">
+    <input type="file" id="xmlFile" accept=".xml,.txt" onchange="loadFile(this,'xmlInput')"/>
+    <label for="xmlFile" class="file-label">Attach .xml</label>
+    <span class="file-name" id="xmlFileName"></span>
+  </div>
+  <textarea id="xmlInput" placeholder="Paste XML here..."></textarea>
+  <div class="btn-row">
+    <button class="btn btn-primary" onclick="xmlConvert()">Convert to JSON</button>
+    <button class="btn btn-green" onclick="xmlDownloadExcel()">Download as Excel</button>
+    <span class="spinner" id="xmlSpinner"></span>
+  </div>
+  <div class="status" id="xmlStatus"></div>
+  <div class="preview" id="xmlPreview" style="display:none">
+    <button class="btn btn-secondary" onclick="copyText('xmlOutput')">Copy JSON</button>
+    <pre class="output-box" id="xmlOutput"></pre>
+  </div>
+</div>
+
+<!-- ═══════════════════ SQL → CSV ═══════════════════ -->
+<div class="panel" id="panel-sql-csv">
+  <h2>SQL &rarr; CSV / Excel</h2>
+  <div class="file-row">
+    <input type="file" id="sqlFile" accept=".sql,.txt" onchange="loadFile(this,'sqlInput')"/>
+    <label for="sqlFile" class="file-label">Attach .sql</label>
+    <span class="file-name" id="sqlFileName"></span>
+  </div>
+  <textarea id="sqlInput" placeholder="Paste SQL (CREATE TABLE + INSERT INTO) here..."></textarea>
+  <div class="btn-row">
+    <button class="btn btn-primary" onclick="sqlConvert()">Parse &amp; Preview</button>
+    <span class="spinner" id="sqlSpinner"></span>
+  </div>
+  <div class="status" id="sqlStatus"></div>
+  <div class="preview" id="sqlPreview" style="display:none">
+    <div class="btn-row">
+      <button class="btn btn-green" onclick="sqlDownload('csv')">Download .csv</button>
+      <button class="btn btn-green" onclick="sqlDownload('excel')">Download .xlsx</button>
+    </div>
+    <div class="preview-table-wrap"><table class="preview-table" id="sqlPreviewTable"></table></div>
+  </div>
+</div>
+
+<!-- ═══════════════════ CSV → JSON ═══════════════════ -->
+<div class="panel" id="panel-csv-json">
+  <h2>CSV &rarr; JSON</h2>
+  <div class="file-row">
+    <input type="file" id="csvJsonFile" accept=".csv,.tsv,.txt" onchange="loadFile(this,'csvJsonInput')"/>
+    <label for="csvJsonFile" class="file-label">Attach .csv</label>
+    <span class="file-name" id="csvJsonFileName"></span>
+  </div>
+  <textarea id="csvJsonInput" placeholder="Paste CSV data here..."></textarea>
+  <div class="options-row">
+    <div><label>Delimiter</label><select id="csvJsonDelimiter"><option value=",">,</option><option value="&#9;">Tab</option><option value=";">;</option><option value="|">|</option></select></div>
+  </div>
+  <div class="btn-row">
+    <button class="btn btn-primary" onclick="csvJsonConvert()">Convert</button>
+    <span class="spinner" id="csvJsonSpinner"></span>
+  </div>
+  <div class="status" id="csvJsonStatus"></div>
+  <div class="preview" id="csvJsonPreview" style="display:none">
+    <button class="btn btn-secondary" onclick="copyText('csvJsonOutput')">Copy JSON</button>
+    <pre class="output-box" id="csvJsonOutput"></pre>
+  </div>
+</div>
+
+<!-- ═══════════════════ SVG → PNG (Client-side) ═══════════════════ -->
+<div class="panel" id="panel-svg-png">
+  <h2>SVG &rarr; PNG</h2>
+  <div class="file-row">
+    <input type="file" id="svgFile" accept=".svg" onchange="loadFile(this,'svgInput')"/>
+    <label for="svgFile" class="file-label">Attach .svg</label>
+    <span class="file-name" id="svgFileName"></span>
+  </div>
+  <textarea id="svgInput" placeholder="Paste SVG markup here..."></textarea>
+  <div class="btn-row">
+    <button class="btn btn-primary" onclick="svgConvert()">Convert to PNG</button>
+  </div>
+  <div class="status" id="svgStatus"></div>
+  <div class="preview" id="svgPreview" style="display:none">
+    <button class="btn btn-green" onclick="svgDownload()">Download .png</button>
+    <br/><img class="img-preview" id="svgPreviewImg"/>
+  </div>
+</div>
+
+<!-- ═══════════════════ Image Resizer ═══════════════════ -->
+<div class="panel" id="panel-image-resize">
+  <h2>Image Resizer / Compressor</h2>
+  <div class="file-row">
+    <input type="file" id="imageFile" accept="image/*"/>
+    <label for="imageFile" class="file-label">Choose Image</label>
+    <span class="file-name" id="imageFileName"></span>
+  </div>
+  <div class="options-row">
+    <div><label>Width (px)</label><input type="number" id="imgWidth" placeholder="auto" style="width:100px"/></div>
+    <div><label>Height (px)</label><input type="number" id="imgHeight" placeholder="auto" style="width:100px"/></div>
+    <div><label>Quality</label><input type="number" id="imgQuality" value="85" min="1" max="100" style="width:80px"/></div>
+    <div><label>Format</label><select id="imgFormat"><option value="JPEG">JPEG</option><option value="PNG">PNG</option><option value="WEBP">WebP</option></select></div>
+  </div>
+  <div class="btn-row">
+    <button class="btn btn-primary" onclick="imageResize()">Resize</button>
+    <span class="spinner" id="imageSpinner"></span>
+  </div>
+  <div class="status" id="imageStatus"></div>
+  <div class="preview" id="imagePreview" style="display:none">
+    <button class="btn btn-green" onclick="imageDownload()">Download</button>
+    <br/><img class="img-preview" id="imagePreviewImg"/>
+  </div>
+</div>
+
+<!-- ═══════════════════ Base64 ↔ Image ═══════════════════ -->
+<div class="panel" id="panel-base64-image">
+  <h2>Base64 &harr; Image</h2>
+  <p style="font-size:0.85rem;color:#656d76;margin-bottom:12px">Encode an image to Base64, or decode Base64 to an image.</p>
+  <div class="file-row">
+    <input type="file" id="b64ImageFile" accept="image/*"/>
+    <label for="b64ImageFile" class="file-label">Choose Image to Encode</label>
+    <span class="file-name" id="b64ImageFileName"></span>
+  </div>
+  <div class="btn-row">
+    <button class="btn btn-primary" onclick="b64Encode()">Encode to Base64</button>
+    <span class="spinner" id="b64EncSpinner"></span>
+  </div>
+  <div class="status" id="b64EncStatus"></div>
+  <div class="preview" id="b64EncPreview" style="display:none">
+    <button class="btn btn-secondary" onclick="copyText('b64Output')">Copy Base64</button>
+    <pre class="output-box" id="b64Output" style="max-height:200px"></pre>
+  </div>
+  <hr style="margin:24px 0;border:none;border-top:1px solid #d1d9e0"/>
+  <textarea id="b64DecodeInput" placeholder="Paste Base64 / data URI here..." style="min-height:100px"></textarea>
+  <div class="btn-row">
+    <button class="btn btn-primary" onclick="b64Decode()">Decode to Image</button>
+    <span class="spinner" id="b64DecSpinner"></span>
+  </div>
+  <div class="status" id="b64DecStatus"></div>
+  <div class="preview" id="b64DecPreview" style="display:none">
+    <button class="btn btn-green" onclick="b64DecDownload()">Download Image</button>
+    <br/><img class="img-preview" id="b64DecImg"/>
+  </div>
+</div>
+
+<!-- ═══════════════════ JSON Formatter (Client-side) ═══════════════════ -->
+<div class="panel" id="panel-json-format">
+  <h2>JSON Formatter / Validator</h2>
+  <textarea id="jsonFormatInput" placeholder="Paste JSON here..."></textarea>
+  <div class="options-row">
+    <div><label>Indent</label><select id="jsonIndent"><option value="2">2 spaces</option><option value="4">4 spaces</option></select></div>
+  </div>
+  <div class="btn-row">
+    <button class="btn btn-primary" onclick="jsonFormat()">Format</button>
+    <button class="btn btn-secondary" onclick="jsonMinify()">Minify</button>
+  </div>
+  <div class="status" id="jsonFormatStatus"></div>
+  <div class="preview" id="jsonFormatPreview" style="display:none">
+    <button class="btn btn-secondary" onclick="copyText('jsonFormatOutput')">Copy</button>
+    <pre class="output-box" id="jsonFormatOutput"></pre>
+  </div>
+</div>
+
+<!-- ═══════════════════ TOML → JSON/YAML ═══════════════════ -->
+<div class="panel" id="panel-toml-json">
+  <h2>TOML &rarr; JSON / YAML</h2>
+  <div class="file-row">
+    <input type="file" id="tomlFile" accept=".toml,.txt" onchange="loadFile(this,'tomlInput')"/>
+    <label for="tomlFile" class="file-label">Attach .toml</label>
+    <span class="file-name" id="tomlFileName"></span>
+  </div>
+  <textarea id="tomlInput" placeholder="Paste TOML here..."></textarea>
+  <div class="options-row">
+    <div><label>Output</label><select id="tomlFormat"><option value="json">JSON</option><option value="yaml">YAML</option></select></div>
+  </div>
+  <div class="btn-row">
+    <button class="btn btn-primary" onclick="tomlConvert()">Convert</button>
+    <span class="spinner" id="tomlSpinner"></span>
+  </div>
+  <div class="status" id="tomlStatus"></div>
+  <div class="preview" id="tomlPreview" style="display:none">
+    <button class="btn btn-secondary" onclick="copyText('tomlOutput')">Copy</button>
+    <pre class="output-box" id="tomlOutput"></pre>
+  </div>
+</div>
+
+<!-- ═══════════════════ Cron Parser ═══════════════════ -->
+<div class="panel" id="panel-cron-human">
+  <h2>Cron Expression Parser</h2>
+  <input type="text" id="cronInput" placeholder="e.g. */5 * * * *" style="max-width:400px"/>
+  <div class="btn-row">
+    <button class="btn btn-primary" onclick="cronParse()">Parse</button>
+    <span class="spinner" id="cronSpinner"></span>
+  </div>
+  <div class="status" id="cronStatus"></div>
+  <div class="preview" id="cronPreview" style="display:none">
+    <p><strong>Description:</strong> <span id="cronDesc"></span></p>
+    <p style="margin-top:8px"><strong>Next 5 runs:</strong></p>
+    <pre class="output-box" id="cronRuns"></pre>
+  </div>
+</div>
+
+<!-- ═══════════════════ Unit Converter (Client-side) ═══════════════════ -->
+<div class="panel" id="panel-unit">
+  <h2>Unit Converter</h2>
+  <div class="options-row">
+    <div><label>Category</label><select id="unitCategory" onchange="unitUpdateSelects()">
+      <option value="length">Length</option><option value="weight">Weight</option>
+      <option value="temperature">Temperature</option><option value="volume">Volume</option>
+      <option value="area">Area</option><option value="speed">Speed</option>
+      <option value="data">Data</option>
+    </select></div>
+    <div><label>Value</label><input type="number" id="unitValue" value="1" style="width:120px" oninput="unitConvert()"/></div>
+    <div><label>From</label><select id="unitFrom" onchange="unitConvert()"></select></div>
+    <div><label>To</label><select id="unitTo" onchange="unitConvert()"></select></div>
+  </div>
+  <div style="font-size:1.4rem;margin-top:16px;font-weight:600" id="unitResult"></div>
+</div>
+
+<!-- ═══════════════════ Color Converter (Client-side) ═══════════════════ -->
+<div class="panel" id="panel-color">
+  <h2>Color Converter</h2>
+  <div class="color-swatch" id="colorSwatch" style="background:#0969da"></div>
+  <div class="color-inputs">
+    <div><label>HEX</label><input type="text" id="colorHex" value="#0969da" oninput="colorFromHex()"/></div>
+    <div><label>RGB</label><input type="text" id="colorRgb" value="9, 105, 218" oninput="colorFromRgb()"/></div>
+    <div><label>HSL</label><input type="text" id="colorHsl" value="212, 92%, 45%" oninput="colorFromHsl()"/></div>
+  </div>
+</div>
+
+<!-- ═══════════════════ Timestamp Tool ═══════════════════ -->
+<div class="panel" id="panel-timestamp">
+  <h2>Timestamp Converter</h2>
+  <p style="font-size:0.85rem;color:#656d76;margin-bottom:12px">Current UTC: <strong id="tsNow"></strong></p>
+  <input type="text" id="tsInput" placeholder="Unix timestamp, ISO date, or human-readable date..." style="max-width:500px"/>
+  <div class="btn-row">
+    <button class="btn btn-primary" onclick="tsParse()">Convert</button>
+    <button class="btn btn-secondary" onclick="tsNow()">Now</button>
+    <span class="spinner" id="tsSpinner"></span>
+  </div>
+  <div class="status" id="tsStatus"></div>
+  <div class="preview" id="tsPreview" style="display:none">
+    <pre class="output-box" id="tsOutput"></pre>
+  </div>
+</div>
+
+</section>
+</main>
+
+<footer>Ayo's Converter &mdash; 19 free converters, no signup required.</footer>
+
 <script>
-  /* ── File upload ─────────────────────────────────────────── */
-  function loadFile(input, textareaId) {
-    const file = input.files[0];
-    if (!file) return;
+// ═══════════════════════════════════════════════════════════════
+// Utilities
+// ═══════════════════════════════════════════════════════════════
+function esc(s) { const d = document.createElement("div"); d.textContent = String(s ?? ""); return d.innerHTML; }
 
-    // Show file name
-    const nameSpan = input.parentElement.querySelector(".file-name");
-    nameSpan.textContent = file.name;
+function loadFile(input, textareaId) {
+  if (!input.files[0]) return;
+  const file = input.files[0];
+  const nameEl = input.parentElement.querySelector(".file-name");
+  if (nameEl) nameEl.textContent = file.name;
+  const reader = new FileReader();
+  reader.onload = () => { document.getElementById(textareaId).value = reader.result; };
+  reader.readAsText(file);
+}
 
-    const reader = new FileReader();
-    reader.onload = function(e) {
-      document.getElementById(textareaId).value = e.target.result;
-    };
-    reader.onerror = function() {
-      nameSpan.textContent = "Failed to read file.";
-    };
-    reader.readAsText(file);
-  }
+function copyText(elId) {
+  const text = document.getElementById(elId).textContent;
+  navigator.clipboard.writeText(text);
+}
 
-  /* ── Converter switching ────────────────────────────────── */
-  let _currentConverter = "json";
+function downloadText(elId, filename, mime) {
+  const text = document.getElementById(elId).textContent;
+  const blob = new Blob([text], { type: mime });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = filename; a.click(); URL.revokeObjectURL(a.href);
+}
 
-  function switchConverter(id) {
-    _currentConverter = id;
-    document.querySelectorAll(".converter-tab").forEach((t, i) => {
-      const ids = ["json", "md-docx", "md-pdf"];
-      t.classList.toggle("active", ids[i] === id);
-    });
-    document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
-    document.getElementById("panel-" + id).classList.add("active");
-  }
+function downloadBlob(blob, filename) {
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = filename; a.click(); URL.revokeObjectURL(a.href);
+}
 
-  /* ── JSON helpers ───────────────────────────────────────── */
-  let _sheets = [];
-  let _active = 0;
+function setStatus(id, msg, type) { const el = document.getElementById(id); el.textContent = msg; el.className = "status " + type; }
+function showSpin(id, on) { document.getElementById(id).style.display = on ? "inline-block" : "none"; }
 
-  function jsonSetStatus(msg, type = "info") {
-    document.getElementById("jsonStatusText").textContent = msg;
-    document.getElementById("jsonStatus").className = "status-bar " + type;
-  }
-  function jsonSpin(on) {
-    document.getElementById("jsonSpinner").style.display = on ? "block" : "none";
-    document.getElementById("jsonConvertBtn").disabled = on;
-  }
+// ═══════════════════════════════════════════════════════════════
+// Navigation
+// ═══════════════════════════════════════════════════════════════
+function switchConverter(id) {
+  document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
+  document.querySelectorAll(".sidebar-item").forEach(s => s.classList.remove("active"));
+  const panel = document.getElementById("panel-" + id);
+  if (panel) panel.classList.add("active");
+  document.querySelectorAll(".sidebar-item").forEach(s => {
+    if (s.getAttribute("onclick") && s.getAttribute("onclick").includes("'" + id + "'")) s.classList.add("active");
+  });
+  document.querySelector(".mobile-select").value = id;
+}
 
-  async function jsonConvert() {
-    const raw = document.getElementById("jsonInput").value.trim();
-    const ta  = document.getElementById("jsonInput");
-    ta.classList.remove("error");
+// ═══════════════════════════════════════════════════════════════
+// JSON → Excel
+// ═══════════════════════════════════════════════════════════════
+let _sheets = [], _active = 0;
 
-    if (!raw) { jsonSetStatus("Nothing to convert — paste some JSON first.", "err"); return; }
+async function jsonConvert() {
+  const raw = document.getElementById("jsonInput").value.trim();
+  if (!raw) { setStatus("jsonStatus","Paste or attach JSON first.","err"); return; }
+  setStatus("jsonStatus","Converting...","info"); showSpin("jsonSpinner",true);
+  try {
+    const body = { json: raw, flatten: document.getElementById("jsonFlatten").value==="1",
+      sep: document.getElementById("jsonSep").value, sheet_name: document.getElementById("jsonSheetName").value,
+      strip_prefix: document.getElementById("jsonStripPrefix").value==="1" };
+    const res = await fetch("/json/preview", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error||"Server error"); }
+    const data = await res.json();
+    _sheets = data.sheets; _active = 0;
+    renderSheetTabs(); renderSheetTable(0);
+    document.getElementById("jsonPreview").style.display = "block";
+    setStatus("jsonStatus",`${_sheets.length} sheet(s), ${_sheets.reduce((a,s)=>a+s.rows.length,0)} rows`,"ok");
+  } catch(e) { setStatus("jsonStatus",e.message,"err"); }
+  showSpin("jsonSpinner",false);
+}
 
-    let parsed;
-    try { parsed = JSON.parse(raw); }
-    catch (e) {
-      ta.classList.add("error");
-      jsonSetStatus("Invalid JSON: " + e.message, "err");
-      return;
-    }
+function renderSheetTabs() {
+  document.getElementById("sheetTabs").innerHTML = _sheets.map((s,i) =>
+    `<div class="sheet-tab${i===_active?" active":""}" onclick="switchSheetTab(${i})">${esc(s.name)}</div>`).join("");
+}
+function switchSheetTab(i) { _active = i; renderSheetTabs(); renderSheetTable(i); }
+function renderSheetTable(i) {
+  const s = _sheets[i]; if (!s) return;
+  const hdr = s.columns.map(c=>`<th>${esc(c)}</th>`).join("");
+  const rows = s.rows.slice(0,100).map(r=>"<tr>"+s.columns.map(c=>`<td>${esc(r[c])}</td>`).join("")+"</tr>").join("");
+  document.getElementById("previewTable").innerHTML = `<thead><tr>${hdr}</tr></thead><tbody>${rows}</tbody>`;
+}
 
-    jsonSpin(true);
-    jsonSetStatus("Converting…", "info");
+async function jsonDownload() {
+  const raw = document.getElementById("jsonInput").value.trim(); if (!raw) return;
+  const body = { json: raw, flatten: document.getElementById("jsonFlatten").value==="1",
+    sep: document.getElementById("jsonSep").value, sheet_name: document.getElementById("jsonSheetName").value,
+    strip_prefix: document.getElementById("jsonStripPrefix").value==="1" };
+  const res = await fetch("/json/download", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
+  if (!res.ok) { setStatus("jsonStatus","Download failed","err"); return; }
+  downloadBlob(await res.blob(), "converted.xlsx");
+}
 
-    const flatten      = document.querySelector('input[name="flatten"]:checked').value;
-    const strip_prefix = document.querySelector('input[name="strip_prefix"]:checked').value;
-    const sep          = document.getElementById("sepInput").value || ".";
-    const sheetName    = document.getElementById("sheetName").value || "Sheet1";
+// ═══════════════════════════════════════════════════════════════
+// Markdown → DOCX / PDF
+// ═══════════════════════════════════════════════════════════════
+function cap(s) { return s.charAt(0).toUpperCase()+s.slice(1); }
 
-    try {
-      const res = await fetch("/json/preview", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ json: raw, flatten: flatten === "true", strip_prefix: strip_prefix === "true", sep, sheet_name: sheetName }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Server error");
+async function mdConvert(fmt) {
+  const id = fmt==="docx"?"mdDocx":"mdPdf";
+  const raw = document.getElementById(id+"Input").value.trim();
+  if (!raw) { setStatus(id+"Status","Paste Markdown first.","err"); return; }
+  setStatus(id+"Status","Converting...","info"); showSpin(id+"Spinner",true);
+  try {
+    const res = await fetch("/md/preview", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({markdown:raw}) });
+    if (!res.ok) throw new Error("Server error");
+    const data = await res.json();
+    document.getElementById(id+"Rendered").innerHTML = data.html;
+    document.getElementById(id+"Preview").style.display = "block";
+    setStatus(id+"Status","Preview ready","ok");
+  } catch(e) { setStatus(id+"Status",e.message,"err"); }
+  showSpin(id+"Spinner",false);
+}
 
-      _sheets = data.sheets;
-      _active = 0;
-      renderTabs();
-      renderTable(0);
+async function mdDownload(fmt) {
+  const id = fmt==="docx"?"mdDocx":"mdPdf";
+  const raw = document.getElementById(id+"Input").value.trim(); if (!raw) return;
+  const res = await fetch("/md/download/"+fmt, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({markdown:raw}) });
+  if (!res.ok) { setStatus(id+"Status","Download failed","err"); return; }
+  downloadBlob(await res.blob(), "converted."+(fmt==="docx"?"docx":"pdf"));
+}
 
-      document.getElementById("jsonPreview").style.display = "block";
-      document.getElementById("jsonDownloadBtn").style.display = "inline-block";
-      document.getElementById("jsonDownloadBtnTop").style.display = "inline-block";
-      setTimeout(() => document.getElementById("jsonPreview").scrollIntoView({ behavior: "smooth", block: "start" }), 50);
+// ═══════════════════════════════════════════════════════════════
+// CSV → Excel
+// ═══════════════════════════════════════════════════════════════
+async function csvExcelConvert() {
+  const raw = document.getElementById("csvExcelInput").value.trim();
+  if (!raw) { setStatus("csvExcelStatus","Paste CSV first.","err"); return; }
+  setStatus("csvExcelStatus","Converting...","info"); showSpin("csvExcelSpinner",true);
+  try {
+    const res = await fetch("/csv/preview", { method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({csv: raw, delimiter: document.getElementById("csvDelimiter").value}) });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error||"Server error"); }
+    const data = await res.json();
+    const hdr = data.columns.map(c=>`<th>${esc(c)}</th>`).join("");
+    const rows = data.rows.slice(0,100).map(r=>"<tr>"+data.columns.map(c=>`<td>${esc(r[c])}</td>`).join("")+"</tr>").join("");
+    document.getElementById("csvPreviewTable").innerHTML = `<thead><tr>${hdr}</tr></thead><tbody>${rows}</tbody>`;
+    document.getElementById("csvExcelPreview").style.display = "block";
+    setStatus("csvExcelStatus",`${data.rows.length} rows`,"ok");
+  } catch(e) { setStatus("csvExcelStatus",e.message,"err"); }
+  showSpin("csvExcelSpinner",false);
+}
 
-      const total = _sheets.reduce((s, sh) => s + sh.rows.length, 0);
-      jsonSetStatus(`${_sheets.length} sheet(s) · ${total} total row(s) — ready to download.`, "ok");
-    } catch (e) {
-      jsonSetStatus(e.message, "err");
-    } finally {
-      jsonSpin(false);
-    }
-  }
+async function csvExcelDownload() {
+  const raw = document.getElementById("csvExcelInput").value.trim(); if (!raw) return;
+  const res = await fetch("/csv/download/excel", { method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({csv: raw, delimiter: document.getElementById("csvDelimiter").value}) });
+  if (!res.ok) { setStatus("csvExcelStatus","Download failed","err"); return; }
+  downloadBlob(await res.blob(), "converted.xlsx");
+}
 
-  function renderTabs() {
-    document.getElementById("sheetTabs").innerHTML = _sheets.map((s, i) =>
-      `<div class="sheet-tab ${i === _active ? "active" : ""}" onclick="switchTab(${i})">${s.name}</div>`
-    ).join("");
-  }
-  function switchTab(i) { _active = i; renderTabs(); renderTable(i); }
+// ═══════════════════════════════════════════════════════════════
+// YAML → JSON
+// ═══════════════════════════════════════════════════════════════
+async function yamlConvert() {
+  const raw = document.getElementById("yamlInput").value.trim();
+  if (!raw) { setStatus("yamlStatus","Paste YAML first.","err"); return; }
+  setStatus("yamlStatus","Converting...","info"); showSpin("yamlSpinner",true);
+  try {
+    const res = await fetch("/yaml/convert", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({yaml:raw}) });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error||"Server error"); }
+    const data = await res.json();
+    document.getElementById("yamlOutput").textContent = data.json;
+    document.getElementById("yamlPreview").style.display = "block";
+    setStatus("yamlStatus","Converted","ok");
+  } catch(e) { setStatus("yamlStatus",e.message,"err"); }
+  showSpin("yamlSpinner",false);
+}
 
-  function renderTable(i) {
-    const sheet = _sheets[i];
-    const thead = document.querySelector("#previewTable thead");
-    const tbody = document.querySelector("#previewTable tbody");
-    thead.innerHTML = "<tr>" + sheet.columns.map(c => `<th title="${c}">${c}</th>`).join("") + "</tr>";
-    tbody.innerHTML = sheet.rows.slice(0, 100).map(row =>
-      "<tr>" + sheet.columns.map(c => `<td title="${row[c] ?? ""}">${row[c] ?? ""}</td>`).join("") + "</tr>"
-    ).join("");
-    const extra = sheet.rows.length > 100 ? ` (showing first 100 of ${sheet.rows.length})` : "";
-    document.getElementById("rowCount").textContent = `${sheet.rows.length} row(s)${extra}`;
-  }
+// ═══════════════════════════════════════════════════════════════
+// HTML → Markdown
+// ═══════════════════════════════════════════════════════════════
+async function htmlMdConvert() {
+  const raw = document.getElementById("htmlMdInput").value.trim();
+  if (!raw) { setStatus("htmlMdStatus","Paste HTML first.","err"); return; }
+  setStatus("htmlMdStatus","Converting...","info"); showSpin("htmlMdSpinner",true);
+  try {
+    const res = await fetch("/html/convert", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({html:raw}) });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error||"Server error"); }
+    const data = await res.json();
+    document.getElementById("htmlMdOutput").textContent = data.markdown;
+    document.getElementById("htmlMdPreview").style.display = "block";
+    setStatus("htmlMdStatus","Converted","ok");
+  } catch(e) { setStatus("htmlMdStatus",e.message,"err"); }
+  showSpin("htmlMdSpinner",false);
+}
 
-  async function jsonDownload() {
-    const raw          = document.getElementById("jsonInput").value.trim();
-    const flatten      = document.querySelector('input[name="flatten"]:checked').value;
-    const strip_prefix = document.querySelector('input[name="strip_prefix"]:checked').value;
-    const sep          = document.getElementById("sepInput").value || ".";
-    const sheetName    = document.getElementById("sheetName").value || "Sheet1";
+// ═══════════════════════════════════════════════════════════════
+// PDF → Text
+// ═══════════════════════════════════════════════════════════════
+async function pdfExtract() {
+  const fileInput = document.getElementById("pdfFile");
+  if (!fileInput.files[0]) { setStatus("pdfStatus","Choose a PDF first.","err"); return; }
+  document.getElementById("pdfFileName").textContent = fileInput.files[0].name;
+  setStatus("pdfStatus","Extracting...","info"); showSpin("pdfSpinner",true);
+  try {
+    const fd = new FormData(); fd.append("file", fileInput.files[0]);
+    const res = await fetch("/pdf/extract", { method:"POST", body: fd });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error||"Server error"); }
+    const data = await res.json();
+    document.getElementById("pdfOutput").textContent = data.text;
+    document.getElementById("pdfPreview").style.display = "block";
+    setStatus("pdfStatus","Extracted","ok");
+  } catch(e) { setStatus("pdfStatus",e.message,"err"); }
+  showSpin("pdfSpinner",false);
+}
 
-    const res = await fetch("/json/download", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ json: raw, flatten: flatten === "true", strip_prefix: strip_prefix === "true", sep, sheet_name: sheetName }),
-    });
-    if (!res.ok) { jsonSetStatus("Download failed.", "err"); return; }
+// ═══════════════════════════════════════════════════════════════
+// XML → JSON
+// ═══════════════════════════════════════════════════════════════
+async function xmlConvert() {
+  const raw = document.getElementById("xmlInput").value.trim();
+  if (!raw) { setStatus("xmlStatus","Paste XML first.","err"); return; }
+  setStatus("xmlStatus","Converting...","info"); showSpin("xmlSpinner",true);
+  try {
+    const res = await fetch("/xml/convert", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({xml:raw}) });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error||"Server error"); }
+    const data = await res.json();
+    document.getElementById("xmlOutput").textContent = data.json;
+    document.getElementById("xmlPreview").style.display = "block";
+    setStatus("xmlStatus","Converted","ok");
+  } catch(e) { setStatus("xmlStatus",e.message,"err"); }
+  showSpin("xmlSpinner",false);
+}
 
-    const blob = await res.blob();
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement("a");
-    a.href = url; a.download = "converted.xlsx"; a.click();
+async function xmlDownloadExcel() {
+  const raw = document.getElementById("xmlInput").value.trim();
+  if (!raw) { setStatus("xmlStatus","Paste XML first.","err"); return; }
+  const res = await fetch("/xml/download/excel", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({xml:raw}) });
+  if (!res.ok) { setStatus("xmlStatus","Download failed","err"); return; }
+  downloadBlob(await res.blob(), "converted.xlsx");
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SQL → CSV / Excel
+// ═══════════════════════════════════════════════════════════════
+let _sqlData = null;
+async function sqlConvert() {
+  const raw = document.getElementById("sqlInput").value.trim();
+  if (!raw) { setStatus("sqlStatus","Paste SQL first.","err"); return; }
+  setStatus("sqlStatus","Parsing...","info"); showSpin("sqlSpinner",true);
+  try {
+    const res = await fetch("/sql/preview", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({sql:raw}) });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error||"Server error"); }
+    _sqlData = await res.json();
+    const tables = _sqlData.tables;
+    const name = Object.keys(tables)[0];
+    if (!name) throw new Error("No tables found");
+    const t = tables[name];
+    const hdr = t.columns.map(c=>`<th>${esc(c)}</th>`).join("");
+    const rows = t.rows.slice(0,100).map(r=>"<tr>"+r.map(v=>`<td>${esc(v)}</td>`).join("")+"</tr>").join("");
+    document.getElementById("sqlPreviewTable").innerHTML = `<thead><tr>${hdr}</tr></thead><tbody>${rows}</tbody>`;
+    document.getElementById("sqlPreview").style.display = "block";
+    setStatus("sqlStatus",`Table "${name}": ${t.rows.length} rows`,"ok");
+  } catch(e) { setStatus("sqlStatus",e.message,"err"); }
+  showSpin("sqlSpinner",false);
+}
+
+async function sqlDownload(fmt) {
+  const raw = document.getElementById("sqlInput").value.trim(); if (!raw) return;
+  const res = await fetch("/sql/download/"+ fmt, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({sql:raw}) });
+  if (!res.ok) { setStatus("sqlStatus","Download failed","err"); return; }
+  const ext = fmt === "csv" ? "csv" : "xlsx";
+  downloadBlob(await res.blob(), "converted." + ext);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CSV → JSON
+// ═══════════════════════════════════════════════════════════════
+async function csvJsonConvert() {
+  const raw = document.getElementById("csvJsonInput").value.trim();
+  if (!raw) { setStatus("csvJsonStatus","Paste CSV first.","err"); return; }
+  setStatus("csvJsonStatus","Converting...","info"); showSpin("csvJsonSpinner",true);
+  try {
+    const res = await fetch("/csv/to-json", { method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({csv: raw, delimiter: document.getElementById("csvJsonDelimiter").value}) });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error||"Server error"); }
+    const data = await res.json();
+    document.getElementById("csvJsonOutput").textContent = data.json;
+    document.getElementById("csvJsonPreview").style.display = "block";
+    setStatus("csvJsonStatus","Converted","ok");
+  } catch(e) { setStatus("csvJsonStatus",e.message,"err"); }
+  showSpin("csvJsonSpinner",false);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SVG → PNG (Client-side)
+// ═══════════════════════════════════════════════════════════════
+let _svgBlob = null;
+function svgConvert() {
+  const svg = document.getElementById("svgInput").value.trim();
+  if (!svg) { setStatus("svgStatus","Paste SVG first.","err"); return; }
+  setStatus("svgStatus","Converting...","info");
+  const blob = new Blob([svg], {type:"image/svg+xml;charset=utf-8"});
+  const url = URL.createObjectURL(blob);
+  const img = new Image();
+  img.onload = function() {
+    const c = document.createElement("canvas");
+    c.width = img.naturalWidth || 800; c.height = img.naturalHeight || 600;
+    c.getContext("2d").drawImage(img, 0, 0);
+    c.toBlob(function(pngBlob) {
+      _svgBlob = pngBlob;
+      document.getElementById("svgPreviewImg").src = URL.createObjectURL(pngBlob);
+      document.getElementById("svgPreview").style.display = "block";
+      setStatus("svgStatus",`Converted (${c.width}x${c.height})`,"ok");
+    }, "image/png");
     URL.revokeObjectURL(url);
+  };
+  img.onerror = function() { setStatus("svgStatus","Invalid SVG","err"); URL.revokeObjectURL(url); };
+  img.src = url;
+}
+function svgDownload() { if (_svgBlob) downloadBlob(_svgBlob, "converted.png"); }
+
+// ═══════════════════════════════════════════════════════════════
+// Image Resizer
+// ═══════════════════════════════════════════════════════════════
+let _resizedBlob = null;
+async function imageResize() {
+  const fileInput = document.getElementById("imageFile");
+  if (!fileInput.files[0]) { setStatus("imageStatus","Choose an image.","err"); return; }
+  document.getElementById("imageFileName").textContent = fileInput.files[0].name;
+  setStatus("imageStatus","Resizing...","info"); showSpin("imageSpinner",true);
+  try {
+    const fd = new FormData(); fd.append("file", fileInput.files[0]);
+    const w = document.getElementById("imgWidth").value; if (w) fd.append("width", w);
+    const h = document.getElementById("imgHeight").value; if (h) fd.append("height", h);
+    fd.append("quality", document.getElementById("imgQuality").value);
+    fd.append("format", document.getElementById("imgFormat").value);
+    const res = await fetch("/image/resize", { method:"POST", body: fd });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error||"Server error"); }
+    _resizedBlob = await res.blob();
+    document.getElementById("imagePreviewImg").src = URL.createObjectURL(_resizedBlob);
+    document.getElementById("imagePreview").style.display = "block";
+    setStatus("imageStatus",`Done (${(_resizedBlob.size/1024).toFixed(1)} KB)`,"ok");
+  } catch(e) { setStatus("imageStatus",e.message,"err"); }
+  showSpin("imageSpinner",false);
+}
+function imageDownload() {
+  if (!_resizedBlob) return;
+  const fmt = document.getElementById("imgFormat").value.toLowerCase();
+  downloadBlob(_resizedBlob, "resized." + (fmt==="jpeg"?"jpg":fmt));
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Base64 ↔ Image
+// ═══════════════════════════════════════════════════════════════
+async function b64Encode() {
+  const fileInput = document.getElementById("b64ImageFile");
+  if (!fileInput.files[0]) { setStatus("b64EncStatus","Choose an image.","err"); return; }
+  document.getElementById("b64ImageFileName").textContent = fileInput.files[0].name;
+  setStatus("b64EncStatus","Encoding...","info"); showSpin("b64EncSpinner",true);
+  try {
+    const fd = new FormData(); fd.append("file", fileInput.files[0]);
+    const res = await fetch("/base64/encode", { method:"POST", body: fd });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error||"Error"); }
+    const data = await res.json();
+    document.getElementById("b64Output").textContent = data.base64;
+    document.getElementById("b64EncPreview").style.display = "block";
+    setStatus("b64EncStatus","Encoded","ok");
+  } catch(e) { setStatus("b64EncStatus",e.message,"err"); }
+  showSpin("b64EncSpinner",false);
+}
+
+let _b64DecBlob = null;
+async function b64Decode() {
+  const raw = document.getElementById("b64DecodeInput").value.trim();
+  if (!raw) { setStatus("b64DecStatus","Paste Base64 first.","err"); return; }
+  setStatus("b64DecStatus","Decoding...","info"); showSpin("b64DecSpinner",true);
+  try {
+    const res = await fetch("/base64/decode", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({data:raw}) });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error||"Error"); }
+    _b64DecBlob = await res.blob();
+    document.getElementById("b64DecImg").src = URL.createObjectURL(_b64DecBlob);
+    document.getElementById("b64DecPreview").style.display = "block";
+    setStatus("b64DecStatus","Decoded","ok");
+  } catch(e) { setStatus("b64DecStatus",e.message,"err"); }
+  showSpin("b64DecSpinner",false);
+}
+function b64DecDownload() { if (_b64DecBlob) downloadBlob(_b64DecBlob, "decoded.png"); }
+
+// ═══════════════════════════════════════════════════════════════
+// JSON Formatter (Client-side)
+// ═══════════════════════════════════════════════════════════════
+function jsonFormat() {
+  const raw = document.getElementById("jsonFormatInput").value.trim();
+  if (!raw) { setStatus("jsonFormatStatus","Paste JSON first.","err"); return; }
+  try {
+    const parsed = JSON.parse(raw);
+    const indent = parseInt(document.getElementById("jsonIndent").value)||2;
+    document.getElementById("jsonFormatOutput").textContent = JSON.stringify(parsed, null, indent);
+    document.getElementById("jsonFormatPreview").style.display = "block";
+    setStatus("jsonFormatStatus","Valid JSON","ok");
+  } catch(e) { setStatus("jsonFormatStatus","Invalid JSON: "+e.message,"err"); document.getElementById("jsonFormatPreview").style.display="none"; }
+}
+function jsonMinify() {
+  const raw = document.getElementById("jsonFormatInput").value.trim();
+  if (!raw) return;
+  try {
+    document.getElementById("jsonFormatOutput").textContent = JSON.stringify(JSON.parse(raw));
+    document.getElementById("jsonFormatPreview").style.display = "block";
+    setStatus("jsonFormatStatus","Minified","ok");
+  } catch(e) { setStatus("jsonFormatStatus","Invalid JSON: "+e.message,"err"); }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TOML → JSON/YAML
+// ═══════════════════════════════════════════════════════════════
+async function tomlConvert() {
+  const raw = document.getElementById("tomlInput").value.trim();
+  if (!raw) { setStatus("tomlStatus","Paste TOML first.","err"); return; }
+  setStatus("tomlStatus","Converting...","info"); showSpin("tomlSpinner",true);
+  try {
+    const fmt = document.getElementById("tomlFormat").value;
+    const res = await fetch("/toml/convert", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({toml:raw,format:fmt}) });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error||"Error"); }
+    const data = await res.json();
+    document.getElementById("tomlOutput").textContent = data.result;
+    document.getElementById("tomlPreview").style.display = "block";
+    setStatus("tomlStatus","Converted to "+fmt.toUpperCase(),"ok");
+  } catch(e) { setStatus("tomlStatus",e.message,"err"); }
+  showSpin("tomlSpinner",false);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Cron Parser
+// ═══════════════════════════════════════════════════════════════
+async function cronParse() {
+  const raw = document.getElementById("cronInput").value.trim();
+  if (!raw) { setStatus("cronStatus","Enter a cron expression.","err"); return; }
+  setStatus("cronStatus","Parsing...","info"); showSpin("cronSpinner",true);
+  try {
+    const res = await fetch("/cron/parse", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({cron:raw}) });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error||"Error"); }
+    const data = await res.json();
+    document.getElementById("cronDesc").textContent = data.description;
+    document.getElementById("cronRuns").textContent = data.next_runs.join("\n");
+    document.getElementById("cronPreview").style.display = "block";
+    setStatus("cronStatus","Parsed","ok");
+  } catch(e) { setStatus("cronStatus",e.message,"err"); }
+  showSpin("cronSpinner",false);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Unit Converter (Client-side)
+// ═══════════════════════════════════════════════════════════════
+const UNITS = {
+  length: {m:1, km:1000, cm:0.01, mm:0.001, "in":0.0254, ft:0.3048, yd:0.9144, mi:1609.344},
+  weight: {kg:1, g:0.001, mg:1e-6, lb:0.453592, oz:0.0283495, t:1000},
+  temperature: {C:"C", F:"F", K:"K"},
+  volume: {L:1, mL:0.001, gal:3.78541, qt:0.946353, cup:0.236588, "fl oz":0.0295735},
+  area: {"m2":1, "km2":1e6, "cm2":1e-4, "ft2":0.092903, "ac":4046.86, "ha":10000},
+  speed: {"m/s":1, "km/h":0.277778, "mph":0.44704, "kn":0.514444},
+  data: {B:1, KB:1024, MB:1048576, GB:1073741824, TB:1099511627776}
+};
+function unitUpdateSelects() {
+  const cat = document.getElementById("unitCategory").value;
+  const keys = Object.keys(UNITS[cat]);
+  const opts = keys.map(k=>`<option value="${k}">${k}</option>`).join("");
+  document.getElementById("unitFrom").innerHTML = opts;
+  document.getElementById("unitTo").innerHTML = opts;
+  if (keys.length>1) document.getElementById("unitTo").selectedIndex = 1;
+  unitConvert();
+}
+function unitConvert() {
+  const cat = document.getElementById("unitCategory").value;
+  const val = parseFloat(document.getElementById("unitValue").value)||0;
+  const from = document.getElementById("unitFrom").value;
+  const to = document.getElementById("unitTo").value;
+  let result;
+  if (cat==="temperature") {
+    let c;
+    if (from==="C") c=val; else if (from==="F") c=(val-32)*5/9; else c=val-273.15;
+    if (to==="C") result=c; else if (to==="F") result=c*9/5+32; else result=c+273.15;
+  } else {
+    result = val * UNITS[cat][from] / UNITS[cat][to];
   }
+  document.getElementById("unitResult").textContent = `${val} ${from} = ${parseFloat(result.toPrecision(10))} ${to}`;
+}
 
-  document.getElementById("jsonInput").addEventListener("keydown", e => {
-    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") jsonConvert();
-  });
+// ═══════════════════════════════════════════════════════════════
+// Color Converter (Client-side)
+// ═══════════════════════════════════════════════════════════════
+function colorFromHex() {
+  const hex = document.getElementById("colorHex").value.trim().replace("#","");
+  if (hex.length!==6 && hex.length!==3) return;
+  const full = hex.length===3 ? hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2] : hex;
+  const r=parseInt(full.substr(0,2),16), g=parseInt(full.substr(2,2),16), b=parseInt(full.substr(4,2),16);
+  if (isNaN(r)||isNaN(g)||isNaN(b)) return;
+  updateColor(r,g,b,"hex");
+}
+function colorFromRgb() {
+  const parts = document.getElementById("colorRgb").value.split(",").map(s=>parseInt(s.trim()));
+  if (parts.length!==3 || parts.some(isNaN)) return;
+  updateColor(parts[0],parts[1],parts[2],"rgb");
+}
+function colorFromHsl() {
+  const raw = document.getElementById("colorHsl").value.replace(/%/g,"");
+  const parts = raw.split(",").map(s=>parseFloat(s.trim()));
+  if (parts.length!==3 || parts.some(isNaN)) return;
+  const [r,g,b] = hslToRgb(parts[0]/360, parts[1]/100, parts[2]/100);
+  updateColor(r,g,b,"hsl");
+}
+function updateColor(r,g,b,src) {
+  const hex = "#"+[r,g,b].map(v=>v.toString(16).padStart(2,"0")).join("");
+  const [h,s,l] = rgbToHsl(r,g,b);
+  document.getElementById("colorSwatch").style.background = hex;
+  if (src!=="hex") document.getElementById("colorHex").value = hex;
+  if (src!=="rgb") document.getElementById("colorRgb").value = `${r}, ${g}, ${b}`;
+  if (src!=="hsl") document.getElementById("colorHsl").value = `${Math.round(h*360)}, ${Math.round(s*100)}%, ${Math.round(l*100)}%`;
+}
+function rgbToHsl(r,g,b) { r/=255;g/=255;b/=255; const mx=Math.max(r,g,b),mn=Math.min(r,g,b); let h,s,l=(mx+mn)/2;
+  if(mx===mn){h=s=0}else{const d=mx-mn;s=l>0.5?d/(2-mx-mn):d/(mx+mn);
+  if(mx===r)h=((g-b)/d+(g<b?6:0))/6;else if(mx===g)h=((b-r)/d+2)/6;else h=((r-g)/d+4)/6;} return [h,s,l]; }
+function hslToRgb(h,s,l) { if(s===0) { const v=Math.round(l*255); return [v,v,v]; }
+  function hue2rgb(p,q,t){if(t<0)t+=1;if(t>1)t-=1;if(t<1/6)return p+(q-p)*6*t;if(t<1/2)return q;if(t<2/3)return p+(q-p)*(2/3-t)*6;return p;}
+  const q=l<0.5?l*(1+s):l+s-l*s, p=2*l-q;
+  return [Math.round(hue2rgb(p,q,h+1/3)*255), Math.round(hue2rgb(p,q,h)*255), Math.round(hue2rgb(p,q,h-1/3)*255)]; }
 
-  /* ── Markdown helpers ───────────────────────────────────── */
+// ═══════════════════════════════════════════════════════════════
+// Timestamp Tool
+// ═══════════════════════════════════════════════════════════════
+async function tsParse() {
+  const raw = document.getElementById("tsInput").value.trim();
+  if (!raw) { setStatus("tsStatus","Enter a timestamp.","err"); return; }
+  setStatus("tsStatus","Converting...","info"); showSpin("tsSpinner",true);
+  try {
+    const res = await fetch("/timestamp/parse", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({input:raw}) });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error||"Error"); }
+    const data = await res.json();
+    document.getElementById("tsOutput").textContent = Object.entries(data).map(([k,v])=>`${k}: ${v}`).join("\n");
+    document.getElementById("tsPreview").style.display = "block";
+    setStatus("tsStatus","Converted","ok");
+  } catch(e) { setStatus("tsStatus",e.message,"err"); }
+  showSpin("tsSpinner",false);
+}
+function tsNow() { document.getElementById("tsInput").value = Math.floor(Date.now()/1000); tsParse(); }
+setInterval(()=>{ const el=document.getElementById("tsNow"); if(el) el.textContent=new Date().toISOString(); }, 1000);
 
-  function mdSetStatus(fmt, msg, type = "info") {
-    document.getElementById("md" + cap(fmt) + "StatusText").textContent = msg;
-    document.getElementById("md" + cap(fmt) + "Status").className = "status-bar " + type;
-  }
-  function mdSpin(fmt, on) {
-    document.getElementById("md" + cap(fmt) + "Spinner").style.display = on ? "block" : "none";
-    document.getElementById("md" + cap(fmt) + "ConvertBtn").disabled = on;
-  }
-  function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
-
-  async function mdConvert(fmt) {
-    const ta  = document.getElementById("md" + cap(fmt) + "Input");
-    const raw = ta.value.trim();
-    ta.classList.remove("error");
-
-    if (!raw) { mdSetStatus(fmt, "Nothing to convert — write some Markdown first.", "err"); return; }
-
-    mdSpin(fmt, true);
-    mdSetStatus(fmt, "Converting…", "info");
-
-    try {
-      const res = await fetch("/md/preview", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ markdown: raw }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Server error");
-
-      document.getElementById("md" + cap(fmt) + "Rendered").innerHTML = data.html;
-      document.getElementById("md" + cap(fmt) + "Preview").style.display = "block";
-      document.getElementById("md" + cap(fmt) + "DownloadBtn").style.display = "inline-block";
-      document.getElementById("md" + cap(fmt) + "DownloadBtnTop").style.display = "inline-block";
-      setTimeout(() => document.getElementById("md" + cap(fmt) + "Preview").scrollIntoView({ behavior: "smooth", block: "start" }), 50);
-      mdSetStatus(fmt, "Preview ready — click download to save.", "ok");
-    } catch (e) {
-      mdSetStatus(fmt, e.message, "err");
-    } finally {
-      mdSpin(fmt, false);
-    }
-  }
-
-  async function mdDownload(fmt) {
-    const raw = document.getElementById("md" + cap(fmt) + "Input").value.trim();
-    if (!raw) return;
-
-    mdSetStatus(fmt, "Generating file…", "info");
-    mdSpin(fmt, true);
-
-    try {
-      const res = await fetch("/md/download/" + fmt, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ markdown: raw }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || "Download failed.");
-      }
-
-      const blob = await res.blob();
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement("a");
-      a.href = url;
-      a.download = "converted." + fmt;
-      a.click();
-      URL.revokeObjectURL(url);
-      mdSetStatus(fmt, "Downloaded!", "ok");
-    } catch (e) {
-      mdSetStatus(fmt, e.message, "err");
-    } finally {
-      mdSpin(fmt, false);
-    }
-  }
-
-  // Ctrl/Cmd+Enter in markdown textareas
-  ["mdDocxInput", "mdPdfInput"].forEach(id => {
-    document.getElementById(id).addEventListener("keydown", e => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-        const fmt = id.includes("Docx") ? "docx" : "pdf";
-        mdConvert(fmt);
-      }
-    });
-  });
+// Init
+unitUpdateSelects();
 </script>
 </body>
 </html>
 """
 
 
-# ═══════════════════════════════════════════════════════════════
-# Routes
-# ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
+# Security & Production Middleware
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.after_request
+def set_headers(response):
+    # Security headers
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+        "connect-src 'self'; frame-ancestors 'none';"
+    )
+    # Cache headers
+    if request.path == "/":
+        response.headers["Cache-Control"] = "public, max-age=3600"
+    elif request.path in ("/robots.txt", "/sitemap.xml", "/llms.txt"):
+        response.headers["Cache-Control"] = "public, max-age=86400"
+    elif request.method == "POST":
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.errorhandler(400)
+def bad_request(e):
+    return jsonify({"error": "Bad request"}), 400
+
+
+@app.errorhandler(404)
+def not_found(e):
+    return jsonify({"error": "Not found"}), 404
+
+
+@app.errorhandler(413)
+def too_large(e):
+    return jsonify({"error": "File too large. Maximum 10 MB."}), 413
+
+
+@app.errorhandler(429)
+def rate_limited(e):
+    return jsonify({"error": "Too many requests. Please try again later."}), 429
+
+
+@app.errorhandler(500)
+def server_error(e):
+    app.logger.error(f"Internal error: {e}")
+    return jsonify({"error": "Internal server error"}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Routes — Pages
+# ═══════════════════════════════════════════════════════════════════════════
 
 @app.route("/")
 def index():
     return HTML
 
 
-# ── JSON → Excel ────────────────────────────────────────────
+@app.route("/health")
+def health():
+    return jsonify({"status": "ok", "converters": 19})
 
-@app.route("/preview", methods=["POST"])
+
+@app.route("/robots.txt")
+def robots():
+    return Response("User-agent: *\nAllow: /\n", mimetype="text/plain")
+
+
+@app.route("/sitemap.xml")
+def sitemap():
+    xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n<url><loc>/</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>\n</urlset>'
+    return Response(xml, mimetype="application/xml")
+
+
+@app.route("/llms.txt")
+def llms_txt():
+    text = """# Ayo's Converter
+
+> Free online file format converter supporting 19+ formats.
+
+## Converters
+
+### Document / Text
+- JSON to Excel: Convert JSON data to formatted Excel spreadsheets
+- Markdown to DOCX: Convert Markdown to Microsoft Word
+- Markdown to PDF: Convert Markdown to PDF
+- CSV to Excel: Convert CSV data to formatted Excel spreadsheets
+- YAML to JSON: Convert YAML documents to JSON
+- HTML to Markdown: Convert HTML to clean Markdown
+- PDF to Text: Extract text content from PDF files
+
+### Data
+- XML to JSON/Excel: Convert XML documents to JSON or Excel
+- SQL to CSV/Excel: Parse SQL CREATE/INSERT statements into tabular data
+- CSV to JSON: Convert CSV to JSON records
+
+### Image / Media
+- SVG to PNG: Rasterize SVG to PNG (client-side)
+- Image Resizer: Resize and compress images (JPEG, PNG, WebP)
+- Base64 to Image: Encode images to Base64 and decode back
+
+### Developer Tools
+- JSON Formatter: Validate, format, and minify JSON
+- TOML to JSON/YAML: Convert TOML configuration to JSON or YAML
+- Cron Parser: Translate cron expressions to human-readable descriptions
+
+### Everyday Use
+- Unit Converter: Convert length, weight, temperature, volume, area, speed, data
+- Color Converter: Convert between HEX, RGB, and HSL
+- Timestamp Tool: Parse and convert timestamps
+"""
+    return Response(text, mimetype="text/plain; charset=utf-8")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Routes — JSON → Excel
+# ═══════════════════════════════════════════════════════════════════════════
+
 @app.route("/json/preview", methods=["POST"])
+@app.route("/preview", methods=["POST"])
 def json_preview():
     body = request.get_json(force=True)
+    raw = _validate_text(body.get("json", ""), "JSON input")
     try:
-        data = json.loads(body["json"])
-    except (json.JSONDecodeError, KeyError) as e:
-        return jsonify({"error": f"Invalid JSON: {e}"}), 400
+        data = load_json(raw)
+    except (json.JSONDecodeError, ValueError) as exc:
+        return jsonify({"error": f"Invalid JSON: {exc}"}), 400
 
-    try:
-        sheets = json_to_dataframes(
-            data,
-            flatten=body.get("flatten", True),
-            sep=body.get("sep", "."),
-            sheet_name=body.get("sheet_name", "Sheet1"),
-            strip_prefix=body.get("strip_prefix", True),
-        )
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    flatten = body.get("flatten", True)
+    sep = body.get("sep", ".")
+    sheet_name = body.get("sheet_name", "Sheet1")
+    strip_prefix = body.get("strip_prefix", True)
 
+    sheets = json_to_dataframes(data, flatten=flatten, sep=sep, sheet_name=sheet_name, strip_prefix=strip_prefix)
     result = []
     for name, df in sheets:
-        df = df.fillna("").astype(str)
-        result.append({
-            "name": name,
-            "columns": df.columns.tolist(),
-            "rows": df.to_dict(orient="records"),
-        })
-
+        result.append({"name": name, "columns": df.columns.tolist(), "rows": df.fillna("").to_dict(orient="records")})
     return jsonify({"sheets": result})
 
 
-@app.route("/download", methods=["POST"])
 @app.route("/json/download", methods=["POST"])
+@app.route("/download", methods=["POST"])
+@limiter.limit("30 per hour")
 def json_download():
     body = request.get_json(force=True)
-    try:
-        data = json.loads(body["json"])
-    except (json.JSONDecodeError, KeyError) as e:
-        return jsonify({"error": f"Invalid JSON: {e}"}), 400
-
-    sheets = json_to_dataframes(
-        data,
-        flatten=body.get("flatten", True),
-        sep=body.get("sep", "."),
-        sheet_name=body.get("sheet_name", "Sheet1"),
-        strip_prefix=body.get("strip_prefix", True),
-    )
-
-    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
-        tmp_path = tmp.name
-
-    to_excel(sheets, tmp_path)
-
-    with open(tmp_path, "rb") as f:
-        buf = io.BytesIO(f.read())
-    Path(tmp_path).unlink(missing_ok=True)
-
-    buf.seek(0)
-    return send_file(
-        buf,
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        as_attachment=True,
-        download_name="converted.xlsx",
-    )
+    raw = _validate_text(body.get("json", ""), "JSON input")
+    data = load_json(raw)
+    sheets = json_to_dataframes(data, flatten=body.get("flatten", True), sep=body.get("sep", "."),
+                                sheet_name=body.get("sheet_name", "Sheet1"), strip_prefix=body.get("strip_prefix", True))
+    tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+    tmp.close()
+    to_excel(sheets, tmp.name)
+    resp = send_file(tmp.name, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                     as_attachment=True, download_name="converted.xlsx")
+    Path(tmp.name).unlink(missing_ok=True)
+    return resp
 
 
-# ── Markdown preview / download ─────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════
+# Routes — Markdown → DOCX / PDF
+# ═══════════════════════════════════════════════════════════════════════════
 
 @app.route("/md/preview", methods=["POST"])
 def md_preview():
     body = request.get_json(force=True)
-    raw = body.get("markdown", "")
-    if not raw.strip():
-        return jsonify({"error": "Empty markdown."}), 400
-
-    try:
-        html = md_to_html(raw)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-    return jsonify({"html": html})
+    raw = _validate_text(body.get("markdown", ""), "Markdown")
+    html = md_to_html(raw)
+    safe = bleach.clean(html, tags=_ALLOWED_TAGS, attributes=_ALLOWED_ATTRS, strip=True)
+    return jsonify({"html": safe})
 
 
 @app.route("/md/download/docx", methods=["POST"])
+@limiter.limit("30 per hour")
 def md_download_docx():
     body = request.get_json(force=True)
-    raw = body.get("markdown", "")
-    if not raw.strip():
-        return jsonify({"error": "Empty markdown."}), 400
-
-    try:
-        data = md_to_docx_bytes(raw)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-    buf = io.BytesIO(data)
-    buf.seek(0)
-    return send_file(
-        buf,
-        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        as_attachment=True,
-        download_name="converted.docx",
-    )
+    raw = _validate_text(body.get("markdown", ""), "Markdown")
+    buf = io.BytesIO(md_to_docx_bytes(raw))
+    return send_file(buf, mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                     as_attachment=True, download_name="converted.docx")
 
 
 @app.route("/md/download/pdf", methods=["POST"])
+@limiter.limit("30 per hour")
 def md_download_pdf():
     body = request.get_json(force=True)
-    raw = body.get("markdown", "")
-    if not raw.strip():
-        return jsonify({"error": "Empty markdown."}), 400
+    raw = _validate_text(body.get("markdown", ""), "Markdown")
+    buf = io.BytesIO(md_to_pdf_bytes(raw))
+    return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name="converted.pdf")
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Routes — CSV
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/csv/preview", methods=["POST"])
+def csv_preview():
+    from converters.csv_converter import csv_to_dataframes
+    body = request.get_json(force=True)
+    raw = _validate_text(body.get("csv", ""), "CSV")
+    delimiter = body.get("delimiter", ",")
+    sheets = csv_to_dataframes(raw, delimiter=delimiter)
+    _, df = sheets[0]
+    return jsonify({"columns": df.columns.tolist(), "rows": df.fillna("").to_dict(orient="records")})
+
+
+@app.route("/csv/download/excel", methods=["POST"])
+@limiter.limit("30 per hour")
+def csv_download_excel():
+    from converters.csv_converter import csv_to_dataframes
+    body = request.get_json(force=True)
+    raw = _validate_text(body.get("csv", ""), "CSV")
+    sheets = csv_to_dataframes(raw, delimiter=body.get("delimiter", ","))
+    tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+    tmp.close()
+    to_excel(sheets, tmp.name)
+    resp = send_file(tmp.name, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                     as_attachment=True, download_name="converted.xlsx")
+    Path(tmp.name).unlink(missing_ok=True)
+    return resp
+
+
+@app.route("/csv/to-json", methods=["POST"])
+def csv_to_json():
+    from converters.csv_converter import csv_to_json_str
+    body = request.get_json(force=True)
+    raw = _validate_text(body.get("csv", ""), "CSV")
+    result = csv_to_json_str(raw, delimiter=body.get("delimiter", ","))
+    return jsonify({"json": result})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Routes — YAML
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/yaml/convert", methods=["POST"])
+def yaml_convert():
+    from converters.yaml_converter import yaml_to_json_str
+    body = request.get_json(force=True)
+    raw = _validate_text(body.get("yaml", ""), "YAML")
     try:
-        data = md_to_pdf_bytes(raw)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        result = yaml_to_json_str(raw)
+    except Exception as exc:
+        return jsonify({"error": f"Invalid YAML: {exc}"}), 400
+    return jsonify({"json": result})
 
-    buf = io.BytesIO(data)
-    buf.seek(0)
-    return send_file(
-        buf,
-        mimetype="application/pdf",
-        as_attachment=True,
-        download_name="converted.pdf",
-    )
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Routes — HTML → Markdown
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/html/convert", methods=["POST"])
+def html_convert():
+    from converters.html_converter import html_to_markdown
+    body = request.get_json(force=True)
+    raw = _validate_text(body.get("html", ""), "HTML")
+    result = html_to_markdown(raw)
+    return jsonify({"markdown": result})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Routes — PDF → Text
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/pdf/extract", methods=["POST"])
+@limiter.limit("20 per hour")
+def pdf_extract():
+    from converters.pdf_converter import pdf_to_text
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    file = request.files["file"]
+    if not file.filename.lower().endswith(".pdf"):
+        return jsonify({"error": "File must be a PDF"}), 400
+    pdf_bytes = file.read()
+    try:
+        text = pdf_to_text(pdf_bytes)
+    except Exception as exc:
+        return jsonify({"error": f"PDF extraction failed: {exc}"}), 400
+    return jsonify({"text": text})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Routes — XML
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/xml/convert", methods=["POST"])
+def xml_convert():
+    from converters.xml_converter import xml_to_json_str
+    body = request.get_json(force=True)
+    raw = _validate_text(body.get("xml", ""), "XML")
+    try:
+        result = xml_to_json_str(raw)
+    except Exception as exc:
+        return jsonify({"error": f"Invalid XML: {exc}"}), 400
+    return jsonify({"json": result})
+
+
+@app.route("/xml/download/excel", methods=["POST"])
+@limiter.limit("30 per hour")
+def xml_download_excel():
+    from converters.xml_converter import xml_to_dict
+    body = request.get_json(force=True)
+    raw = _validate_text(body.get("xml", ""), "XML")
+    data = xml_to_dict(raw)
+    sheets = json_to_dataframes(data, flatten=True)
+    tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+    tmp.close()
+    to_excel(sheets, tmp.name)
+    resp = send_file(tmp.name, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                     as_attachment=True, download_name="converted.xlsx")
+    Path(tmp.name).unlink(missing_ok=True)
+    return resp
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Routes — SQL
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/sql/preview", methods=["POST"])
+def sql_preview():
+    from converters.sql_converter import sql_to_records
+    body = request.get_json(force=True)
+    raw = _validate_text(body.get("sql", ""), "SQL")
+    try:
+        result = sql_to_records(raw)
+    except Exception as exc:
+        return jsonify({"error": f"SQL parse error: {exc}"}), 400
+    return jsonify(result)
+
+
+@app.route("/sql/download/csv", methods=["POST"])
+@limiter.limit("30 per hour")
+def sql_download_csv():
+    from converters.sql_converter import sql_to_records, records_to_csv
+    body = request.get_json(force=True)
+    raw = _validate_text(body.get("sql", ""), "SQL")
+    result = sql_to_records(raw)
+    csv_text = records_to_csv(result)
+    buf = io.BytesIO(csv_text.encode("utf-8"))
+    return send_file(buf, mimetype="text/csv", as_attachment=True, download_name="converted.csv")
+
+
+@app.route("/sql/download/excel", methods=["POST"])
+@limiter.limit("30 per hour")
+def sql_download_excel():
+    from converters.sql_converter import sql_to_records
+    import pandas as pd
+    body = request.get_json(force=True)
+    raw = _validate_text(body.get("sql", ""), "SQL")
+    result = sql_to_records(raw)
+    tables = result.get("tables", {})
+    sheets = []
+    for name, table in tables.items():
+        df = pd.DataFrame(table["rows"], columns=table["columns"])
+        sheets.append((name, df))
+    if not sheets:
+        return jsonify({"error": "No tables found"}), 400
+    tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+    tmp.close()
+    to_excel(sheets, tmp.name)
+    resp = send_file(tmp.name, mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                     as_attachment=True, download_name="converted.xlsx")
+    Path(tmp.name).unlink(missing_ok=True)
+    return resp
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Routes — Image
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/image/resize", methods=["POST"])
+@limiter.limit("30 per hour")
+def image_resize():
+    from converters.image_converter import resize_image
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    file = request.files["file"]
+    image_bytes = file.read()
+    width = request.form.get("width", type=int)
+    height = request.form.get("height", type=int)
+    quality = request.form.get("quality", 85, type=int)
+    fmt = request.form.get("format", "JPEG")
+    try:
+        result = resize_image(image_bytes, width=width, height=height, quality=quality, fmt=fmt)
+    except Exception as exc:
+        return jsonify({"error": f"Resize failed: {exc}"}), 400
+    mime_map = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}
+    return send_file(io.BytesIO(result), mimetype=mime_map.get(fmt, "image/jpeg"), as_attachment=True,
+                     download_name=f"resized.{fmt.lower()}")
+
+
+@app.route("/base64/encode", methods=["POST"])
+def base64_encode():
+    from converters.image_converter import image_to_base64
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    file = request.files["file"]
+    image_bytes = file.read()
+    mime = file.content_type or "image/png"
+    result = image_to_base64(image_bytes, mime)
+    return jsonify({"base64": result})
+
+
+@app.route("/base64/decode", methods=["POST"])
+def base64_decode():
+    from converters.image_converter import base64_to_image
+    body = request.get_json(force=True)
+    data = body.get("data", "").strip()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+    try:
+        image_bytes, mime = base64_to_image(data)
+    except Exception as exc:
+        return jsonify({"error": f"Decode failed: {exc}"}), 400
+    return send_file(io.BytesIO(image_bytes), mimetype=mime)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Routes — TOML
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/toml/convert", methods=["POST"])
+def toml_convert():
+    from converters.toml_converter import toml_to_json_str, toml_to_yaml_str
+    body = request.get_json(force=True)
+    raw = _validate_text(body.get("toml", ""), "TOML")
+    fmt = body.get("format", "json")
+    try:
+        result = toml_to_json_str(raw) if fmt == "json" else toml_to_yaml_str(raw)
+    except Exception as exc:
+        return jsonify({"error": f"Invalid TOML: {exc}"}), 400
+    return jsonify({"result": result})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Routes — Cron
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/cron/parse", methods=["POST"])
+def cron_parse():
+    from converters.cron_converter import cron_parse as _cron_parse
+    body = request.get_json(force=True)
+    raw = body.get("cron", "").strip()
+    if not raw:
+        return jsonify({"error": "No cron expression"}), 400
+    try:
+        result = _cron_parse(raw)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(result)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Routes — Timestamp
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/timestamp/parse", methods=["POST"])
+def timestamp_parse():
+    from converters.timestamp_converter import parse_timestamp
+    body = request.get_json(force=True)
+    raw = body.get("input", "").strip()
+    if not raw:
+        return jsonify({"error": "No input"}), 400
+    try:
+        result = parse_timestamp(raw)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(result)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Run
+# ═══════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    import webbrowser, threading
-    url = "http://localhost:5123"
+    import threading, webbrowser
+    url = "http://127.0.0.1:5123"
     threading.Timer(0.8, lambda: webbrowser.open(url)).start()
-    print(f"  Converter UI → {url}")
+    print(f"  Ayo's Converter → {url}")
     app.run(port=5123, debug=False)
