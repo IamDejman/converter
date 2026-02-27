@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from openpyxl.styles import Font
 
 
 # ---------------------------------------------------------------------------
@@ -183,13 +184,16 @@ def to_excel(sheets: list[tuple[str, pd.DataFrame]], output_path: str) -> str:
         for sheet_name, df in sheets:
             df.to_excel(writer, sheet_name=sheet_name, index=False)
 
-            # Auto-fit column widths
+            # Set font and auto-fit column widths
             ws = writer.sheets[sheet_name]
+            tnr = Font(name="Times New Roman", size=11)
+            tnr_bold = Font(name="Times New Roman", size=11, bold=True)
             for col in ws.columns:
-                max_len = max(
-                    (len(str(cell.value)) if cell.value is not None else 0 for cell in col),
-                    default=0,
-                )
+                max_len = 0
+                for cell in col:
+                    cell.font = tnr_bold if cell.row == 1 else tnr
+                    if cell.value is not None:
+                        max_len = max(max_len, len(str(cell.value)))
                 ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 60)
 
     return str(output.resolve())
