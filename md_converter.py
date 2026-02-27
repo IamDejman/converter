@@ -353,7 +353,167 @@ def md_to_docx_bytes(text: str) -> bytes:
 
 def md_to_pdf_bytes(text: str) -> bytes:
     """Convert markdown text to PDF, return raw bytes."""
-    from weasyprint import HTML as WeasyprintHTML
+    from fpdf import FPDF
+    from html.parser import HTMLParser as _HP
 
-    styled = md_to_styled_html(text)
-    return WeasyprintHTML(string=styled).write_pdf()
+    html = md_to_html(text)
+
+    class _PdfBuilder(_HP):
+        """Minimal HTML→fpdf2 renderer for markdown-generated HTML."""
+
+        def __init__(self):
+            super().__init__()
+            self.pdf = FPDF()
+            self.pdf.set_auto_page_break(auto=True, margin=20)
+            self.pdf.add_page()
+            self.pdf.set_font("Times", size=12)
+            self._bold = False
+            self._italic = False
+            self._in_pre = False
+            self._pre_text = ""
+            self._in_li = False
+            self._list_stack: list[str] = []
+            self._list_counters: list[int] = []
+            self._heading_level = 0
+            self._in_table = False
+            self._table_data: list[list[str]] = []
+            self._current_row: list[str] = []
+            self._cell_text = ""
+
+        def _set_font(self):
+            style = ""
+            if self._bold:
+                style += "B"
+            if self._italic:
+                style += "I"
+            size = 12
+            if self._heading_level:
+                size = {1: 24, 2: 20, 3: 16, 4: 14, 5: 12, 6: 11}.get(self._heading_level, 12)
+            if self._in_pre:
+                self.pdf.set_font("Courier", style=style, size=9)
+            else:
+                self.pdf.set_font("Times", style=style, size=size)
+
+        def handle_starttag(self, tag, attrs):
+            if tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
+                self._heading_level = int(tag[1])
+                self._bold = True
+                self._set_font()
+                self.pdf.ln(4)
+            elif tag in ("strong", "b"):
+                self._bold = True
+                self._set_font()
+            elif tag in ("em", "i"):
+                self._italic = True
+                self._set_font()
+            elif tag == "pre":
+                self._in_pre = True
+                self._pre_text = ""
+            elif tag == "code" and not self._in_pre:
+                self.pdf.set_font("Courier", size=10)
+            elif tag in ("ul", "ol"):
+                self._list_stack.append(tag)
+                self._list_counters.append(0)
+            elif tag == "li":
+                self._in_li = True
+                if self._list_stack:
+                    kind = self._list_stack[-1]
+                    if kind == "ul":
+                        self.pdf.cell(10)
+                        self.pdf.cell(6, 6, "- ")
+                    else:
+                        self._list_counters[-1] += 1
+                        self.pdf.cell(10)
+                        self.pdf.cell(6, 6, f"{self._list_counters[-1]}. ")
+            elif tag == "br":
+                self.pdf.ln(5)
+            elif tag == "hr":
+                self.pdf.ln(4)
+                self.pdf.set_draw_color(209, 217, 224)
+                self.pdf.line(10, self.pdf.get_y(), 200, self.pdf.get_y())
+                self.pdf.ln(4)
+            elif tag == "table":
+                self._in_table = True
+                self._table_data = []
+            elif tag == "tr":
+                self._current_row = []
+            elif tag in ("td", "th"):
+                self._cell_text = ""
+
+        def handle_endtag(self, tag):
+            if tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
+                self.pdf.ln(6)
+                self._heading_level = 0
+                self._bold = False
+                self._set_font()
+            elif tag == "p":
+                if not self._in_table:
+                    self.pdf.ln(6)
+            elif tag in ("strong", "b"):
+                self._bold = False
+                self._set_font()
+            elif tag in ("em", "i"):
+                self._italic = False
+                self._set_font()
+            elif tag == "pre":
+                self._in_pre = False
+                self._set_font()
+                self.pdf.set_fill_color(246, 248, 250)
+                self.pdf.set_font("Courier", size=9)
+                for line in self._pre_text.rstrip("\n").split("\n"):
+                    self.pdf.cell(0, 5, line, new_x="LMARGIN", new_y="NEXT", fill=True)
+                self.pdf.ln(4)
+                self._set_font()
+                self._pre_text = ""
+            elif tag == "code" and not self._in_pre:
+                self._set_font()
+            elif tag in ("ul", "ol"):
+                if self._list_stack:
+                    self._list_stack.pop()
+                    self._list_counters.pop()
+                self.pdf.ln(3)
+            elif tag == "li":
+                self._in_li = False
+                self.pdf.ln(5)
+            elif tag in ("td", "th"):
+                self._current_row.append(self._cell_text.strip())
+            elif tag == "tr":
+                self._table_data.append(self._current_row)
+            elif tag == "table":
+                self._in_table = False
+                self._build_table()
+
+        def handle_data(self, data):
+            if self._in_pre:
+                self._pre_text += data
+                return
+            if self._in_table:
+                self._cell_text += data
+                return
+            if data.strip() == "":
+                return
+            self.pdf.write(6, data)
+
+        def _build_table(self):
+            if not self._table_data:
+                return
+            num_cols = max(len(r) for r in self._table_data)
+            if num_cols == 0:
+                return
+            col_w = (self.pdf.w - 20) / num_cols
+            self.pdf.set_font("Times", size=10)
+            for r, row in enumerate(self._table_data):
+                for c, cell in enumerate(row):
+                    if r == 0:
+                        self.pdf.set_font("Times", style="B", size=10)
+                    else:
+                        self.pdf.set_font("Times", size=10)
+                    self.pdf.cell(col_w, 7, cell, border=1)
+                self.pdf.ln()
+            self.pdf.ln(4)
+            self._set_font()
+            self._table_data = []
+
+    builder = _PdfBuilder()
+    builder.feed(html)
+    return bytes(builder.pdf.output())
