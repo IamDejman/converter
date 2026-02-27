@@ -868,6 +868,7 @@ function switchConverter(id) {
     if (s.getAttribute("onclick") && s.getAttribute("onclick").includes("'" + id + "'")) s.classList.add("active");
   });
   document.querySelector(".mobile-select").value = id;
+  if (location.pathname !== "/" + id) history.pushState(null, "", "/" + id);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1365,11 +1366,11 @@ setInterval(()=>{ const el=document.getElementById("tsNow"); if(el) el.textConte
 // Time Zone Converter (client-side)
 // ═══════════════════════════════════════════════════════════════
 const TZ_CITIES = [
-  {region:"Africa",cities:[["Accra","Africa/Accra"],["Addis Ababa","Africa/Addis_Ababa"],["Cairo","Africa/Cairo"],["Cape Town","Africa/Johannesburg"],["Casablanca","Africa/Casablanca"],["Dar es Salaam","Africa/Dar_es_Salaam"],["Johannesburg","Africa/Johannesburg"],["Kigali","Africa/Kigali"],["Kinshasa","Africa/Kinshasa"],["Lagos","Africa/Lagos"],["Nairobi","Africa/Nairobi"],["Tunis","Africa/Tunis"]]},
-  {region:"Americas",cities:[["Anchorage","America/Anchorage"],["Bogota","America/Bogota"],["Buenos Aires","America/Argentina/Buenos_Aires"],["Chicago","America/Chicago"],["Denver","America/Denver"],["Havana","America/Havana"],["Honolulu","Pacific/Honolulu"],["Lima","America/Lima"],["Los Angeles","America/Los_Angeles"],["Mexico City","America/Mexico_City"],["New York","America/New_York"],["Phoenix","America/Phoenix"],["Santiago","America/Santiago"],["Sao Paulo","America/Sao_Paulo"],["Toronto","America/Toronto"],["Vancouver","America/Vancouver"]]},
-  {region:"Asia",cities:[["Almaty","Asia/Almaty"],["Baghdad","Asia/Baghdad"],["Bangkok","Asia/Bangkok"],["Beijing","Asia/Shanghai"],["Colombo","Asia/Colombo"],["Dhaka","Asia/Dhaka"],["Dubai","Asia/Dubai"],["Ho Chi Minh","Asia/Ho_Chi_Minh"],["Hong Kong","Asia/Hong_Kong"],["Istanbul","Europe/Istanbul"],["Jakarta","Asia/Jakarta"],["Jerusalem","Asia/Jerusalem"],["Karachi","Asia/Karachi"],["Kathmandu","Asia/Kathmandu"],["Kolkata","Asia/Kolkata"],["Kuala Lumpur","Asia/Kuala_Lumpur"],["Manila","Asia/Manila"],["Mumbai","Asia/Kolkata"],["Riyadh","Asia/Riyadh"],["Seoul","Asia/Seoul"],["Shanghai","Asia/Shanghai"],["Singapore","Asia/Singapore"],["Taipei","Asia/Taipei"],["Tehran","Asia/Tehran"],["Tokyo","Asia/Tokyo"]]},
-  {region:"Europe",cities:[["Amsterdam","Europe/Amsterdam"],["Athens","Europe/Athens"],["Barcelona","Europe/Madrid"],["Berlin","Europe/Berlin"],["Brussels","Europe/Brussels"],["Bucharest","Europe/Bucharest"],["Budapest","Europe/Budapest"],["Copenhagen","Europe/Copenhagen"],["Dublin","Europe/Dublin"],["Helsinki","Europe/Helsinki"],["Kyiv","Europe/Kyiv"],["Lisbon","Europe/Lisbon"],["London","Europe/London"],["Madrid","Europe/Madrid"],["Milan","Europe/Rome"],["Moscow","Europe/Moscow"],["Oslo","Europe/Oslo"],["Paris","Europe/Paris"],["Prague","Europe/Prague"],["Rome","Europe/Rome"],["Stockholm","Europe/Stockholm"],["Vienna","Europe/Vienna"],["Warsaw","Europe/Warsaw"],["Zurich","Europe/Zurich"]]},
-  {region:"Oceania",cities:[["Auckland","Pacific/Auckland"],["Brisbane","Australia/Brisbane"],["Fiji","Pacific/Fiji"],["Melbourne","Australia/Melbourne"],["Perth","Australia/Perth"],["Sydney","Australia/Sydney"]]}
+  {region:"Africa",cities:[["Abidjan","Africa/Abidjan"],["Accra","Africa/Accra"],["Addis Ababa","Africa/Addis_Ababa"],["Algiers","Africa/Algiers"],["Cairo","Africa/Cairo"],["Cape Town","Africa/Johannesburg"],["Casablanca","Africa/Casablanca"],["Dar es Salaam","Africa/Dar_es_Salaam"],["Johannesburg","Africa/Johannesburg"],["Kampala","Africa/Kampala"],["Khartoum","Africa/Khartoum"],["Kigali","Africa/Kigali"],["Kinshasa","Africa/Kinshasa"],["Lagos","Africa/Lagos"],["Luanda","Africa/Luanda"],["Maputo","Africa/Maputo"],["Nairobi","Africa/Nairobi"],["Tunis","Africa/Tunis"],["Windhoek","Africa/Windhoek"]]},
+  {region:"Americas",cities:[["Anchorage","America/Anchorage"],["Bogota","America/Bogota"],["Buenos Aires","America/Argentina/Buenos_Aires"],["Caracas","America/Caracas"],["Chicago","America/Chicago"],["Dallas","America/Chicago"],["Denver","America/Denver"],["Edmonton","America/Edmonton"],["Halifax","America/Halifax"],["Havana","America/Havana"],["Honolulu","Pacific/Honolulu"],["Lima","America/Lima"],["Los Angeles","America/Los_Angeles"],["Mexico City","America/Mexico_City"],["Montreal","America/Toronto"],["New York","America/New_York"],["Ottawa","America/Toronto"],["Panama City","America/Panama"],["Phoenix","America/Phoenix"],["San Francisco","America/Los_Angeles"],["Santiago","America/Santiago"],["Sao Paulo","America/Sao_Paulo"],["Seattle","America/Los_Angeles"],["St. John's","America/St_Johns"],["Toronto","America/Toronto"],["Vancouver","America/Vancouver"],["Winnipeg","America/Winnipeg"]]},
+  {region:"Asia",cities:[["Almaty","Asia/Almaty"],["Baghdad","Asia/Baghdad"],["Bangkok","Asia/Bangkok"],["Beijing","Asia/Shanghai"],["Colombo","Asia/Colombo"],["Dhaka","Asia/Dhaka"],["Dubai","Asia/Dubai"],["Hanoi","Asia/Ho_Chi_Minh"],["Ho Chi Minh","Asia/Ho_Chi_Minh"],["Hong Kong","Asia/Hong_Kong"],["Istanbul","Europe/Istanbul"],["Jakarta","Asia/Jakarta"],["Jerusalem","Asia/Jerusalem"],["Kabul","Asia/Kabul"],["Karachi","Asia/Karachi"],["Kathmandu","Asia/Kathmandu"],["Kolkata","Asia/Kolkata"],["Kuala Lumpur","Asia/Kuala_Lumpur"],["Kuwait City","Asia/Kuwait"],["Manila","Asia/Manila"],["Mumbai","Asia/Kolkata"],["Muscat","Asia/Muscat"],["Novosibirsk","Asia/Novosibirsk"],["Riyadh","Asia/Riyadh"],["Seoul","Asia/Seoul"],["Shanghai","Asia/Shanghai"],["Singapore","Asia/Singapore"],["Taipei","Asia/Taipei"],["Tashkent","Asia/Tashkent"],["Tehran","Asia/Tehran"],["Tokyo","Asia/Tokyo"],["Vladivostok","Asia/Vladivostok"],["Yangon","Asia/Yangon"]]},
+  {region:"Europe",cities:[["Amsterdam","Europe/Amsterdam"],["Athens","Europe/Athens"],["Barcelona","Europe/Madrid"],["Belgrade","Europe/Belgrade"],["Berlin","Europe/Berlin"],["Brussels","Europe/Brussels"],["Bucharest","Europe/Bucharest"],["Budapest","Europe/Budapest"],["Copenhagen","Europe/Copenhagen"],["Dublin","Europe/Dublin"],["Edinburgh","Europe/London"],["Helsinki","Europe/Helsinki"],["Kyiv","Europe/Kyiv"],["Lisbon","Europe/Lisbon"],["London","Europe/London"],["Madrid","Europe/Madrid"],["Milan","Europe/Rome"],["Minsk","Europe/Minsk"],["Moscow","Europe/Moscow"],["Munich","Europe/Berlin"],["Oslo","Europe/Oslo"],["Paris","Europe/Paris"],["Prague","Europe/Prague"],["Reykjavik","Atlantic/Reykjavik"],["Riga","Europe/Riga"],["Rome","Europe/Rome"],["Sofia","Europe/Sofia"],["Stockholm","Europe/Stockholm"],["Tallinn","Europe/Tallinn"],["Vienna","Europe/Vienna"],["Vilnius","Europe/Vilnius"],["Warsaw","Europe/Warsaw"],["Zurich","Europe/Zurich"]]},
+  {region:"Oceania",cities:[["Adelaide","Australia/Adelaide"],["Auckland","Pacific/Auckland"],["Brisbane","Australia/Brisbane"],["Chatham Islands","Pacific/Chatham"],["Darwin","Australia/Darwin"],["Fiji","Pacific/Fiji"],["Guam","Pacific/Guam"],["Hobart","Australia/Hobart"],["Melbourne","Australia/Melbourne"],["Perth","Australia/Perth"],["Samoa","Pacific/Apia"],["Sydney","Australia/Sydney"],["Tonga","Pacific/Tongatapu"]]}
 ];
 
 function _tzOffset(iana) {
@@ -1540,6 +1541,17 @@ tzSetNow();
 
 // Init
 unitUpdateSelects();
+
+// Route: read initial converter from data attribute injected by server
+const _initConverter = document.documentElement.dataset.converter;
+if (_initConverter && document.getElementById("panel-" + _initConverter)) {
+  switchConverter(_initConverter);
+}
+window.addEventListener("popstate", () => {
+  const path = location.pathname.replace("/", "");
+  if (path && document.getElementById("panel-" + path)) switchConverter(path);
+  else switchConverter("json");
+});
 </script>
 </body>
 </html>
@@ -1602,64 +1614,133 @@ def server_error(e):
 # Routes — Pages
 # ═══════════════════════════════════════════════════════════════════════════
 
+_CONVERTER_SEO = {
+    "json": ("JSON to Excel Converter", "Convert JSON data to Excel spreadsheets online for free. Paste or upload JSON, preview as table, download .xlsx instantly. No signup."),
+    "md-docx": ("Markdown to DOCX Converter", "Convert Markdown to Microsoft Word DOCX online for free. Preview formatted output and download .docx instantly. No signup."),
+    "md-pdf": ("Markdown to PDF Converter", "Convert Markdown to PDF online for free. Preview formatted output and download PDF with proper fonts and formatting. No signup."),
+    "csv-excel": ("CSV to Excel Converter", "Convert CSV to Excel spreadsheets online for free. Auto-detects delimiters (comma, tab, semicolon, pipe). Download .xlsx instantly."),
+    "yaml-json": ("YAML to JSON Converter", "Convert YAML to JSON online for free. Paste YAML, get formatted JSON output instantly. No signup required."),
+    "html-md": ("HTML to Markdown Converter", "Convert HTML to clean Markdown online for free. Paste HTML code and get readable Markdown output. Download .md file instantly."),
+    "pdf-text": ("PDF to Text Extractor", "Extract text from PDF files online for free. Upload PDF, get plain text output. Copy or download extracted text. No signup."),
+    "xml-json": ("XML to JSON Converter", "Convert XML to JSON online for free. Paste XML, get structured JSON output. Also download as Excel. No signup required."),
+    "sql-csv": ("SQL to CSV/Excel Converter", "Convert SQL CREATE TABLE and INSERT statements to CSV or Excel online for free. Parse SQL into tabular data instantly."),
+    "csv-json": ("CSV to JSON Converter", "Convert CSV data to JSON online for free. Auto-detects delimiters. Get formatted JSON array of records instantly. No signup."),
+    "svg-png": ("SVG to PNG Converter", "Convert SVG to PNG image online for free. Client-side conversion, your files never leave your browser. Download PNG instantly."),
+    "image-resize": ("Image Resizer", "Resize and compress images online for free. Support JPEG, PNG, WebP. Set custom dimensions and quality. Download resized image instantly."),
+    "base64-image": ("Base64 Image Encoder/Decoder", "Encode images to Base64 or decode Base64 to images online for free. Support all common formats. No signup required."),
+    "json-format": ("JSON Formatter & Validator", "Format, validate, and minify JSON online for free. Pretty-print with custom indentation. Client-side processing. No signup."),
+    "toml-json": ("TOML to JSON/YAML Converter", "Convert TOML configuration files to JSON or YAML online for free. Paste TOML, get formatted output instantly. No signup."),
+    "cron-human": ("Cron Expression Parser", "Parse cron expressions to human-readable descriptions online for free. See next 5 scheduled run times. Supports standard 5-field cron."),
+    "unit": ("Unit Converter", "Convert between units of length, weight, temperature, volume, area, speed, and data online for free. Instant calculations. No signup."),
+    "color": ("Color Converter", "Convert between HEX, RGB, and HSL color formats online for free. Live color preview swatch. No signup required."),
+    "timestamp": ("Timestamp Converter", "Convert Unix timestamps, ISO dates, and human-readable dates online for free. Parse any date format to all others instantly."),
+    "timezone": ("Time Zone Converter", "Convert time between 150+ cities worldwide. Search by city name, see time difference. Free online time zone converter. No signup."),
+}
+
+_DEFAULT_TITLE = "Ayo's Converter - Free Online File Format Converter"
+_DEFAULT_DESC = "Free online converter for JSON, CSV, YAML, XML, Markdown, PDF, images, and more. Convert between 20+ file formats instantly. No signup required."
+
+
+def _inject_seo(html, converter_id):
+    """Inject per-page SEO meta tags and data-converter attribute."""
+    page = html.replace("<html ", f'<html data-converter="{converter_id}" ', 1)
+    if converter_id in _CONVERTER_SEO:
+        title, desc = _CONVERTER_SEO[converter_id]
+        full_title = f"{title} - Free Online | Ayo's Converter"
+        page = page.replace(
+            "<title>Ayo's Converter - Free Online File Format Converter</title>",
+            f"<title>{full_title}</title>", 1)
+        page = page.replace(_DEFAULT_DESC, desc, 1)
+        page = page.replace(
+            'content="Ayo\'s Converter - Free Online File Format Converter"',
+            f'content="{full_title}"', 1)
+        page = page.replace(
+            'content="Convert between 20+ file formats instantly. JSON, CSV, YAML, XML, Markdown, PDF, images and more."',
+            f'content="{desc}"', 1)
+        page = page.replace('href="/"', f'href="/{converter_id}"', 1)
+    return page
+
+
 @app.route("/")
 def index():
-    return HTML
+    return _inject_seo(HTML, "json")
+
+
+@app.route("/<converter_id>")
+def converter_page(converter_id):
+    if converter_id not in _CONVERTER_SEO:
+        return _inject_seo(HTML, "json"), 404
+    return _inject_seo(HTML, converter_id)
 
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok", "converters": 19})
+    return jsonify({"status": "ok", "converters": 20})
 
 
 @app.route("/robots.txt")
 def robots():
-    return Response("User-agent: *\nAllow: /\n", mimetype="text/plain")
+    host = request.host_url.rstrip("/")
+    return Response(f"User-agent: *\nAllow: /\nSitemap: {host}/sitemap.xml\n", mimetype="text/plain")
 
 
 @app.route("/sitemap.xml")
 def sitemap():
-    xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n<url><loc>/</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>\n</urlset>'
+    host = request.host_url.rstrip("/")
+    urls = [f'<url><loc>{host}/</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>']
+    for cid in _CONVERTER_SEO:
+        urls.append(f'<url><loc>{host}/{cid}</loc><changefreq>weekly</changefreq><priority>0.8</priority></url>')
+    xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n' + "\n".join(urls) + "\n</urlset>"
     return Response(xml, mimetype="application/xml")
 
 
 @app.route("/llms.txt")
 def llms_txt():
-    text = """# Ayo's Converter
+    host = request.host_url.rstrip("/")
+    text = f"""# Ayo's Converter
 
-> Free online file format converter supporting 20+ formats.
+> Free online file format converter supporting 20 converters across 5 categories.
+> No signup, no ads, no file size gimmicks. All conversions run instantly.
+
+## URL: {host}
 
 ## Converters
 
 ### Document / Text
-- JSON to Excel: Convert JSON data to formatted Excel spreadsheets
-- Markdown to DOCX: Convert Markdown to Microsoft Word
-- Markdown to PDF: Convert Markdown to PDF
-- CSV to Excel: Convert CSV data to formatted Excel spreadsheets
-- YAML to JSON: Convert YAML documents to JSON
-- HTML to Markdown: Convert HTML to clean Markdown
-- PDF to Text: Extract text content from PDF files
+- JSON to Excel Converter ({host}/json): Convert JSON data to formatted Excel (.xlsx) spreadsheets. Supports nested JSON with flattening. Preview as table before download.
+- Markdown to DOCX ({host}/md-docx): Convert Markdown to Microsoft Word (.docx). Full support for headings, lists, tables, code blocks, and formatting.
+- Markdown to PDF ({host}/md-pdf): Convert Markdown to PDF with proper Unicode font support (Liberation Serif). Handles bold, italic, headings, lists, code blocks.
+- CSV to Excel ({host}/csv-excel): Convert CSV to Excel (.xlsx). Auto-detects delimiter (comma, tab, semicolon, pipe). Preview data before download.
+- YAML to JSON ({host}/yaml-json): Convert YAML documents to formatted JSON. Supports nested structures, arrays, and all YAML types.
+- HTML to Markdown ({host}/html-md): Convert HTML to clean, readable Markdown. Preserves links, images, tables, and formatting.
+- PDF to Text Extractor ({host}/pdf-text): Extract text content from PDF files. Upload PDF, get plain text. Copy or download as .txt.
 
 ### Data
-- XML to JSON/Excel: Convert XML documents to JSON or Excel
-- SQL to CSV/Excel: Parse SQL CREATE/INSERT statements into tabular data
-- CSV to JSON: Convert CSV to JSON records
+- XML to JSON ({host}/xml-json): Convert XML documents to JSON. Also supports download as Excel (.xlsx).
+- SQL to CSV/Excel ({host}/sql-csv): Parse SQL CREATE TABLE + INSERT INTO statements into tabular CSV or Excel data.
+- CSV to JSON ({host}/csv-json): Convert CSV data to JSON array of records. Auto-detects delimiter.
 
 ### Image / Media
-- SVG to PNG: Rasterize SVG to PNG (client-side)
-- Image Resizer: Resize and compress images (JPEG, PNG, WebP)
-- Base64 to Image: Encode images to Base64 and decode back
+- SVG to PNG ({host}/svg-png): Convert SVG vector graphics to PNG raster image. Client-side conversion, files never uploaded.
+- Image Resizer ({host}/image-resize): Resize and compress JPEG, PNG, WebP images. Set custom width, height, and quality.
+- Base64 Image Encoder/Decoder ({host}/base64-image): Encode images to Base64 data URIs or decode Base64 strings back to images.
 
 ### Developer Tools
-- JSON Formatter: Validate, format, and minify JSON
-- TOML to JSON/YAML: Convert TOML configuration to JSON or YAML
-- Cron Parser: Translate cron expressions to human-readable descriptions
+- JSON Formatter ({host}/json-format): Validate, pretty-print, and minify JSON. Client-side processing with custom indentation.
+- TOML to JSON/YAML ({host}/toml-json): Convert TOML configuration files to JSON or YAML format.
+- Cron Expression Parser ({host}/cron-human): Parse standard 5-field cron expressions to human-readable descriptions. Shows next 5 run times.
 
 ### Everyday Use
-- Unit Converter: Convert length, weight, temperature, volume, area, speed, data
-- Color Converter: Convert between HEX, RGB, and HSL
-- Timestamp Tool: Parse and convert timestamps
-- Time Zone Converter: Convert time between cities worldwide
+- Unit Converter ({host}/unit): Convert between units of length, weight, temperature, volume, area, speed, and data storage.
+- Color Converter ({host}/color): Convert between HEX, RGB, and HSL color formats with live preview swatch.
+- Timestamp Converter ({host}/timestamp): Parse and convert between Unix timestamps, ISO 8601, UTC, and human-readable date formats.
+- Time Zone Converter ({host}/timezone): Convert time between 150+ cities worldwide. Searchable city dropdown with UTC offsets.
+
+## Technical
+- Built with Python/Flask, deployed on Vercel
+- OWASP security headers, rate limiting, input validation
+- Client-side converters (SVG, JSON Formatter, Unit, Color) run entirely in the browser
+- Maximum upload size: 10 MB
 """
     return Response(text, mimetype="text/plain; charset=utf-8")
 
