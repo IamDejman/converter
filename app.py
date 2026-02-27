@@ -1,12 +1,12 @@
 """
 Flask web UI for Ayo's Converter suite.
 
-Supported conversions (19 total):
+Supported conversions (20 total):
   Document/Text: JSON->Excel, Markdown->DOCX, Markdown->PDF, CSV->Excel, YAML->JSON, HTML->Markdown, PDF->Text
   Data: XML->JSON, SQL->CSV, CSV->JSON
   Image/Media: SVG->PNG (client), Image Resizer, Base64<->Image
   Developer Tools: JSON Formatter (client), TOML->JSON/YAML, Cron Parser
-  Everyday Use: Unit Converter (client), Color Converter (client), Timestamp Tool
+  Everyday Use: Unit Converter (client), Color Converter (client), Timestamp Tool, Time Zone Converter (client)
 """
 import io
 import csv as csv_mod
@@ -73,14 +73,14 @@ HTML = r"""<!DOCTYPE html>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Ayo's Converter - Free Online File Format Converter</title>
-  <meta name="description" content="Free online converter for JSON, CSV, YAML, XML, Markdown, PDF, images, and more. Convert between 19+ file formats instantly. No signup required." />
+  <meta name="description" content="Free online converter for JSON, CSV, YAML, XML, Markdown, PDF, images, and more. Convert between 20+ file formats instantly. No signup required." />
   <meta name="keywords" content="file converter, JSON to Excel, CSV to JSON, YAML to JSON, markdown to PDF, online converter, free converter" />
   <meta property="og:title" content="Ayo's Converter - Free Online File Format Converter" />
-  <meta property="og:description" content="Convert between 19+ file formats instantly. JSON, CSV, YAML, XML, Markdown, PDF, images and more." />
+  <meta property="og:description" content="Convert between 20+ file formats instantly. JSON, CSV, YAML, XML, Markdown, PDF, images and more." />
   <meta property="og:type" content="website" />
   <meta name="twitter:card" content="summary" />
   <meta name="twitter:title" content="Ayo's Converter" />
-  <meta name="twitter:description" content="Convert between 19+ file formats instantly." />
+  <meta name="twitter:description" content="Convert between 20+ file formats instantly." />
   <link rel="canonical" href="/" />
   <script type="application/ld+json">
   {
@@ -89,7 +89,7 @@ HTML = r"""<!DOCTYPE html>
     "name": "Ayo's Converter",
     "applicationCategory": "UtilitiesApplication",
     "operatingSystem": "Web",
-    "description": "Free online converter for 19+ file formats including JSON, CSV, YAML, XML, Markdown, PDF, images and more.",
+    "description": "Free online converter for 20+ file formats including JSON, CSV, YAML, XML, Markdown, PDF, images and more.",
     "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}
   }
   </script>
@@ -120,23 +120,33 @@ HTML = r"""<!DOCTYPE html>
 
     /* ── Sidebar ───────────────────────────────────────────── */
     .sidebar {
-      background: #f6f8fa;
-      border-right: 1px solid #d1d9e0;
-      padding: 16px 0;
+      background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+      border-right: 1px solid #e2e8f0;
+      padding: 20px 0;
       overflow-y: auto;
     }
-    .sidebar-category { margin-bottom: 8px; }
+    .sidebar-category { margin-bottom: 6px; }
     .sidebar-category h3 {
-      font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
-      letter-spacing: 0.5px; color: #656d76; padding: 6px 16px;
+      font-size: 0.68rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 1px; color: #94a3b8; padding: 10px 20px 6px;
     }
     .sidebar-item {
-      display: block; padding: 7px 16px 7px 24px; cursor: pointer;
-      font-size: 0.85rem; color: #1f2328; text-decoration: none;
+      display: block;
+      padding: 9px 16px 9px 20px; cursor: pointer;
+      font-size: 0.84rem; color: #475569; text-decoration: none;
+      border-radius: 0 24px 24px 0; margin-right: 12px;
+      transition: all 0.2s ease;
       border-left: 3px solid transparent;
     }
-    .sidebar-item:hover { background: #eaeef2; }
-    .sidebar-item.active { background: #ddf4ff; border-left-color: #0969da; color: #0969da; font-weight: 600; }
+    .sidebar-item:hover {
+      background: #e2e8f0; color: #1e293b;
+    }
+    .sidebar-item.active {
+      background: linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%);
+      color: #1d4ed8; font-weight: 600;
+      border-left-color: #3b82f6;
+      box-shadow: 0 1px 3px rgba(59,130,246,.15);
+    }
 
     .mobile-select { display: none; width: 100%; padding: 10px; font-size: 1rem; font-family: inherit; margin-bottom: 12px; border: 1px solid #d1d9e0; border-radius: 8px; }
 
@@ -235,6 +245,31 @@ HTML = r"""<!DOCTYPE html>
     /* ── Image preview ─────────────────────────────────────── */
     .img-preview { max-width: 100%; max-height: 300px; border: 1px solid #d1d9e0; border-radius: 8px; margin: 12px 0; }
 
+    /* ── Time Zone converter ─────────────────────────────────── */
+    .tz-dropdown {
+      position: absolute; top: 100%; left: 0; right: 0; z-index: 50;
+      background: #fff; border: 1px solid #d1d9e0; border-radius: 8px;
+      max-height: 260px; overflow-y: auto; display: none;
+      box-shadow: 0 8px 24px rgba(0,0,0,.12);
+    }
+    .tz-dropdown.open { display: block; }
+    .tz-dropdown-group { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #94a3b8; padding: 8px 12px 4px; background: #f8fafc; }
+    .tz-dropdown-item {
+      padding: 8px 12px; cursor: pointer; font-size: 0.85rem; color: #1f2328;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .tz-dropdown-item:hover { background: #eff6ff; color: #1d4ed8; }
+    .tz-dropdown-item .tz-offset { font-size: 0.75rem; color: #94a3b8; }
+    .tz-card {
+      background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+      border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; text-align: center;
+    }
+    .tz-card-city { font-size: 0.85rem; font-weight: 600; color: #475569; margin-bottom: 4px; }
+    .tz-card-time { font-size: 2.2rem; font-weight: 700; color: #1e293b; letter-spacing: -1px; }
+    .tz-card-date { font-size: 0.85rem; color: #64748b; margin-top: 2px; }
+    .tz-card-zone { font-size: 0.78rem; color: #94a3b8; margin-top: 6px; }
+    .tz-invalid { border-color: #ef4444 !important; box-shadow: 0 0 0 3px rgba(239,68,68,.15) !important; }
+
     /* ── Footer ────────────────────────────────────────────── */
     footer { text-align: center; padding: 20px; font-size: 0.8rem; color: #8b949e; border-top: 1px solid #d1d9e0; }
 
@@ -252,7 +287,7 @@ HTML = r"""<!DOCTYPE html>
 
 <header class="app-header">
   <h1>Ayo's Converter</h1>
-  <p>19 free online converters &mdash; no signup required</p>
+  <p>20 free online converters &mdash; no signup required</p>
 </header>
 
 <!-- Mobile dropdown -->
@@ -285,6 +320,7 @@ HTML = r"""<!DOCTYPE html>
     <option value="unit">Unit Converter</option>
     <option value="color">Color Converter</option>
     <option value="timestamp">Timestamp Tool</option>
+    <option value="timezone">Time Zone Converter</option>
   </optgroup>
 </select>
 
@@ -318,6 +354,7 @@ HTML = r"""<!DOCTYPE html>
     <a class="sidebar-item" onclick="switchConverter('unit')">Unit Converter</a>
     <a class="sidebar-item" onclick="switchConverter('color')">Color Converter</a>
     <a class="sidebar-item" onclick="switchConverter('timestamp')">Timestamp Tool</a>
+    <a class="sidebar-item" onclick="switchConverter('timezone')">Time Zone Converter</a>
   </div>
 </nav>
 
@@ -403,7 +440,7 @@ HTML = r"""<!DOCTYPE html>
   </div>
   <textarea id="csvExcelInput" placeholder="Paste CSV data here..."></textarea>
   <div class="options-row">
-    <div><label>Delimiter</label><select id="csvDelimiter"><option value=",">,</option><option value="&#9;">Tab</option><option value=";">;</option><option value="|">|</option></select></div>
+    <div><label>Delimiter</label><select id="csvDelimiter"><option value="auto">Auto</option><option value=",">,</option><option value="&#9;">Tab</option><option value=";">;</option><option value="|">|</option></select></div>
   </div>
   <div class="btn-row">
     <button class="btn btn-primary" onclick="csvExcelConvert()">Convert &amp; Preview</button>
@@ -536,7 +573,7 @@ HTML = r"""<!DOCTYPE html>
   </div>
   <textarea id="csvJsonInput" placeholder="Paste CSV data here..."></textarea>
   <div class="options-row">
-    <div><label>Delimiter</label><select id="csvJsonDelimiter"><option value=",">,</option><option value="&#9;">Tab</option><option value=";">;</option><option value="|">|</option></select></div>
+    <div><label>Delimiter</label><select id="csvJsonDelimiter"><option value="auto">Auto</option><option value=",">,</option><option value="&#9;">Tab</option><option value=";">;</option><option value="|">|</option></select></div>
   </div>
   <div class="btn-row">
     <button class="btn btn-primary" onclick="csvJsonConvert()">Convert</button>
@@ -725,10 +762,65 @@ HTML = r"""<!DOCTYPE html>
   </div>
 </div>
 
+<!-- ═══════════════════ Time Zone Converter ═══════════════════ -->
+<div class="panel" id="panel-timezone">
+  <h2>Time Zone Converter</h2>
+  <p style="font-size:0.85rem;color:#656d76;margin-bottom:16px">Convert time between any two cities worldwide.</p>
+  <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:end;max-width:700px">
+    <div>
+      <label style="font-size:0.8rem;color:#656d76;display:block;margin-bottom:4px">From</label>
+      <div style="position:relative">
+        <input type="text" id="tzFromSearch" placeholder="Search city..." autocomplete="off" onfocus="tzOpenDropdown('from')" oninput="tzFilterCities('from')"/>
+        <div class="tz-dropdown" id="tzFromDropdown"></div>
+      </div>
+      <input type="hidden" id="tzFromZone" value="America/New_York"/>
+      <div style="font-size:0.78rem;color:#94a3b8;margin-top:2px" id="tzFromLabel">New York (UTC-5)</div>
+    </div>
+    <div style="text-align:center;padding-bottom:18px">
+      <button class="btn btn-secondary" onclick="tzSwap()" style="padding:8px 12px;font-size:1rem" title="Swap">&harr;</button>
+    </div>
+    <div>
+      <label style="font-size:0.8rem;color:#656d76;display:block;margin-bottom:4px">To</label>
+      <div style="position:relative">
+        <input type="text" id="tzToSearch" placeholder="Search city..." autocomplete="off" onfocus="tzOpenDropdown('to')" oninput="tzFilterCities('to')"/>
+        <div class="tz-dropdown" id="tzToDropdown"></div>
+      </div>
+      <input type="hidden" id="tzToZone" value="Europe/London"/>
+      <div style="font-size:0.78rem;color:#94a3b8;margin-top:2px" id="tzToLabel">London (UTC+0)</div>
+    </div>
+  </div>
+  <div style="display:flex;gap:12px;align-items:end;margin:16px 0;flex-wrap:wrap">
+    <div>
+      <label style="font-size:0.8rem;color:#656d76;display:block;margin-bottom:4px">Date &amp; Time</label>
+      <input type="datetime-local" id="tzDateTime" style="width:auto"/>
+    </div>
+    <button class="btn btn-secondary" onclick="tzSetNow()">Now</button>
+    <button class="btn btn-primary" onclick="tzConvert()">Convert</button>
+  </div>
+  <div class="status" id="tzStatus"></div>
+  <div class="preview" id="tzResult" style="display:none">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:700px">
+      <div class="tz-card">
+        <div class="tz-card-city" id="tzResultFromCity">New York</div>
+        <div class="tz-card-time" id="tzResultFromTime">--:--</div>
+        <div class="tz-card-date" id="tzResultFromDate">---</div>
+        <div class="tz-card-zone" id="tzResultFromZone">EST (UTC-5)</div>
+      </div>
+      <div class="tz-card">
+        <div class="tz-card-city" id="tzResultToCity">London</div>
+        <div class="tz-card-time" id="tzResultToTime">--:--</div>
+        <div class="tz-card-date" id="tzResultToDate">---</div>
+        <div class="tz-card-zone" id="tzResultToZone">GMT (UTC+0)</div>
+      </div>
+    </div>
+    <div style="margin-top:12px;font-size:0.85rem;color:#656d76" id="tzDiffText"></div>
+  </div>
+</div>
+
 </section>
 </main>
 
-<footer>Ayo's Converter &mdash; 19 free converters, no signup required.</footer>
+<footer>Ayo's Converter &mdash; 20 free converters, no signup required.</footer>
 
 <script>
 // ═══════════════════════════════════════════════════════════════
@@ -1269,6 +1361,183 @@ async function tsParse() {
 function tsNow() { document.getElementById("tsInput").value = Math.floor(Date.now()/1000); tsParse(); }
 setInterval(()=>{ const el=document.getElementById("tsNow"); if(el) el.textContent=new Date().toISOString(); }, 1000);
 
+// ═══════════════════════════════════════════════════════════════
+// Time Zone Converter (client-side)
+// ═══════════════════════════════════════════════════════════════
+const TZ_CITIES = [
+  {region:"Africa",cities:[["Accra","Africa/Accra"],["Addis Ababa","Africa/Addis_Ababa"],["Cairo","Africa/Cairo"],["Cape Town","Africa/Johannesburg"],["Casablanca","Africa/Casablanca"],["Dar es Salaam","Africa/Dar_es_Salaam"],["Johannesburg","Africa/Johannesburg"],["Kigali","Africa/Kigali"],["Kinshasa","Africa/Kinshasa"],["Lagos","Africa/Lagos"],["Nairobi","Africa/Nairobi"],["Tunis","Africa/Tunis"]]},
+  {region:"Americas",cities:[["Anchorage","America/Anchorage"],["Bogota","America/Bogota"],["Buenos Aires","America/Argentina/Buenos_Aires"],["Chicago","America/Chicago"],["Denver","America/Denver"],["Havana","America/Havana"],["Honolulu","Pacific/Honolulu"],["Lima","America/Lima"],["Los Angeles","America/Los_Angeles"],["Mexico City","America/Mexico_City"],["New York","America/New_York"],["Phoenix","America/Phoenix"],["Santiago","America/Santiago"],["Sao Paulo","America/Sao_Paulo"],["Toronto","America/Toronto"],["Vancouver","America/Vancouver"]]},
+  {region:"Asia",cities:[["Almaty","Asia/Almaty"],["Baghdad","Asia/Baghdad"],["Bangkok","Asia/Bangkok"],["Beijing","Asia/Shanghai"],["Colombo","Asia/Colombo"],["Dhaka","Asia/Dhaka"],["Dubai","Asia/Dubai"],["Ho Chi Minh","Asia/Ho_Chi_Minh"],["Hong Kong","Asia/Hong_Kong"],["Istanbul","Europe/Istanbul"],["Jakarta","Asia/Jakarta"],["Jerusalem","Asia/Jerusalem"],["Karachi","Asia/Karachi"],["Kathmandu","Asia/Kathmandu"],["Kolkata","Asia/Kolkata"],["Kuala Lumpur","Asia/Kuala_Lumpur"],["Manila","Asia/Manila"],["Mumbai","Asia/Kolkata"],["Riyadh","Asia/Riyadh"],["Seoul","Asia/Seoul"],["Shanghai","Asia/Shanghai"],["Singapore","Asia/Singapore"],["Taipei","Asia/Taipei"],["Tehran","Asia/Tehran"],["Tokyo","Asia/Tokyo"]]},
+  {region:"Europe",cities:[["Amsterdam","Europe/Amsterdam"],["Athens","Europe/Athens"],["Barcelona","Europe/Madrid"],["Berlin","Europe/Berlin"],["Brussels","Europe/Brussels"],["Bucharest","Europe/Bucharest"],["Budapest","Europe/Budapest"],["Copenhagen","Europe/Copenhagen"],["Dublin","Europe/Dublin"],["Helsinki","Europe/Helsinki"],["Kyiv","Europe/Kyiv"],["Lisbon","Europe/Lisbon"],["London","Europe/London"],["Madrid","Europe/Madrid"],["Milan","Europe/Rome"],["Moscow","Europe/Moscow"],["Oslo","Europe/Oslo"],["Paris","Europe/Paris"],["Prague","Europe/Prague"],["Rome","Europe/Rome"],["Stockholm","Europe/Stockholm"],["Vienna","Europe/Vienna"],["Warsaw","Europe/Warsaw"],["Zurich","Europe/Zurich"]]},
+  {region:"Oceania",cities:[["Auckland","Pacific/Auckland"],["Brisbane","Australia/Brisbane"],["Fiji","Pacific/Fiji"],["Melbourne","Australia/Melbourne"],["Perth","Australia/Perth"],["Sydney","Australia/Sydney"]]}
+];
+
+function _tzOffset(iana) {
+  try {
+    const now = new Date();
+    const parts = new Intl.DateTimeFormat("en-US",{timeZone:iana,timeZoneName:"shortOffset"}).formatToParts(now);
+    const off = parts.find(p=>p.type==="timeZoneName");
+    return off ? off.value.replace("GMT","UTC") : "";
+  } catch { return ""; }
+}
+
+function _tzBuildDropdown(target) {
+  const el = document.getElementById(target==="from"?"tzFromDropdown":"tzToDropdown");
+  let html = "";
+  TZ_CITIES.forEach(g=>{
+    html += `<div class="tz-dropdown-group">${esc(g.region)}</div>`;
+    g.cities.forEach(([name,iana])=>{
+      const off = _tzOffset(iana);
+      html += `<div class="tz-dropdown-item" data-iana="${esc(iana)}" data-name="${esc(name)}" onclick="tzSelect('${target}','${iana}','${name.replace(/'/g,"\\'")}')"><span>${esc(name)}</span><span class="tz-offset">${esc(off)}</span></div>`;
+    });
+  });
+  el.innerHTML = html;
+}
+
+function tzOpenDropdown(target) {
+  document.querySelectorAll(".tz-dropdown").forEach(d=>d.classList.remove("open"));
+  const dd = document.getElementById(target==="from"?"tzFromDropdown":"tzToDropdown");
+  if (!dd.innerHTML) _tzBuildDropdown(target);
+  dd.classList.add("open");
+}
+
+function tzFilterCities(target) {
+  const dd = document.getElementById(target==="from"?"tzFromDropdown":"tzToDropdown");
+  const q = document.getElementById(target==="from"?"tzFromSearch":"tzToSearch").value.toLowerCase();
+  // Clear selection when user edits the text — forces re-selection from dropdown
+  document.getElementById(target==="from"?"tzFromZone":"tzToZone").value = "";
+  document.getElementById(target==="from"?"tzFromLabel":"tzToLabel").textContent = "";
+  if (!dd.innerHTML) _tzBuildDropdown(target);
+  dd.querySelectorAll(".tz-dropdown-item").forEach(item=>{
+    const match = item.dataset.name.toLowerCase().includes(q) || item.dataset.iana.toLowerCase().includes(q);
+    item.style.display = match ? "" : "none";
+  });
+  dd.querySelectorAll(".tz-dropdown-group").forEach(g=>{
+    let next = g.nextElementSibling, vis = false;
+    while(next && !next.classList.contains("tz-dropdown-group")) {
+      if (next.style.display !== "none") vis = true;
+      next = next.nextElementSibling;
+    }
+    g.style.display = vis ? "" : "none";
+  });
+  dd.classList.add("open");
+}
+
+let _tzSelectedFrom = "New York", _tzSelectedTo = "London";
+function tzSelect(target, iana, name) {
+  document.getElementById(target==="from"?"tzFromZone":"tzToZone").value = iana;
+  const searchEl = document.getElementById(target==="from"?"tzFromSearch":"tzToSearch");
+  searchEl.value = name;
+  searchEl.classList.remove("tz-invalid");
+  if (target==="from") _tzSelectedFrom = name; else _tzSelectedTo = name;
+  const off = _tzOffset(iana);
+  document.getElementById(target==="from"?"tzFromLabel":"tzToLabel").textContent = `${name} (${off})`;
+  document.querySelectorAll(".tz-dropdown").forEach(d=>d.classList.remove("open"));
+}
+
+function tzSwap() {
+  const fz = document.getElementById("tzFromZone").value, tz = document.getElementById("tzToZone").value;
+  const fs = document.getElementById("tzFromSearch").value, ts = document.getElementById("tzToSearch").value;
+  const fl = document.getElementById("tzFromLabel").textContent, tl = document.getElementById("tzToLabel").textContent;
+  document.getElementById("tzFromZone").value = tz; document.getElementById("tzToZone").value = fz;
+  document.getElementById("tzFromSearch").value = ts; document.getElementById("tzToSearch").value = fs;
+  document.getElementById("tzFromLabel").textContent = tl; document.getElementById("tzToLabel").textContent = fl;
+  const tmpName = _tzSelectedFrom; _tzSelectedFrom = _tzSelectedTo; _tzSelectedTo = tmpName;
+}
+
+function tzSetNow() {
+  const now = new Date();
+  const pad = n => String(n).padStart(2,"0");
+  document.getElementById("tzDateTime").value = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+}
+
+// Build a set of all valid city names for validation
+const _tzValidCities = new Map();
+TZ_CITIES.forEach(g => g.cities.forEach(([name, iana]) => _tzValidCities.set(name.toLowerCase(), iana)));
+
+function tzConvert() {
+  const fromText = document.getElementById("tzFromSearch").value.trim();
+  const toText = document.getElementById("tzToSearch").value.trim();
+  const dtVal = document.getElementById("tzDateTime").value;
+  // Validate: typed text must exactly match a known city name (case-insensitive)
+  const fromIana = _tzValidCities.get(fromText.toLowerCase());
+  const toIana = _tzValidCities.get(toText.toLowerCase());
+  document.getElementById("tzFromSearch").classList.toggle("tz-invalid", !fromIana);
+  document.getElementById("tzToSearch").classList.toggle("tz-invalid", !toIana);
+  if (!fromIana) { setStatus("tzStatus",`"${fromText || '(empty)'}" is not a recognized city. Please select one from the dropdown.`,"err"); document.getElementById("tzResult").style.display="none"; return; }
+  if (!toIana) { setStatus("tzStatus",`"${toText || '(empty)'}" is not a recognized city. Please select one from the dropdown.`,"err"); document.getElementById("tzResult").style.display="none"; return; }
+  if (!dtVal) { setStatus("tzStatus","Pick a date & time.","err"); return; }
+  // Use the validated IANA zones (ignore the hidden inputs which can be stale)
+  const fromZone = fromIana;
+  const toZone = toIana;
+
+  // Parse the datetime-local as if it were in the "from" timezone
+  const [datePart, timePart] = dtVal.split("T");
+  const [yr, mo, dy] = datePart.split("-").map(Number);
+  const [hr, mn] = timePart.split(":").map(Number);
+
+  // Create a Date in the "from" zone by trial: find UTC that formats to the given local time
+  let guess = new Date(Date.UTC(yr, mo-1, dy, hr, mn));
+  for (let i = 0; i < 3; i++) {
+    const parts = new Intl.DateTimeFormat("en-US",{timeZone:fromZone,year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}).formatToParts(guess);
+    const g = {}; parts.forEach(p=>g[p.type]=parseInt(p.value)||0);
+    const diffMin = (hr - g.hour)*60 + (mn - g.minute) + (dy - g.day)*1440;
+    guess = new Date(guess.getTime() + diffMin*60000);
+  }
+
+  const fmt = (zone) => {
+    const o = {timeZone:zone,weekday:"long",year:"numeric",month:"long",day:"numeric"};
+    const date = new Intl.DateTimeFormat("en-US",o).format(guess);
+    const time = new Intl.DateTimeFormat("en-US",{timeZone:zone,hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:true}).format(guess);
+    const zoneParts = new Intl.DateTimeFormat("en-US",{timeZone:zone,timeZoneName:"short"}).formatToParts(guess);
+    const zn = zoneParts.find(p=>p.type==="timeZoneName");
+    const off = _tzOffset(zone);
+    return {date, time, zoneAbbr: zn ? zn.value : "", offset: off};
+  };
+
+  const fromFmt = fmt(fromZone);
+  const toFmt = fmt(toZone);
+  const fromName = document.getElementById("tzFromSearch").value || fromZone.split("/").pop().replace(/_/g," ");
+  const toName = document.getElementById("tzToSearch").value || toZone.split("/").pop().replace(/_/g," ");
+
+  document.getElementById("tzResultFromCity").textContent = fromName;
+  document.getElementById("tzResultFromTime").textContent = fromFmt.time;
+  document.getElementById("tzResultFromDate").textContent = fromFmt.date;
+  document.getElementById("tzResultFromZone").textContent = `${fromFmt.zoneAbbr} (${fromFmt.offset})`;
+
+  document.getElementById("tzResultToCity").textContent = toName;
+  document.getElementById("tzResultToTime").textContent = toFmt.time;
+  document.getElementById("tzResultToDate").textContent = toFmt.date;
+  document.getElementById("tzResultToZone").textContent = `${toFmt.zoneAbbr} (${toFmt.offset})`;
+
+  // Calculate hour difference
+  const fromOff = guess.getTime(); // same moment
+  const fromLocal = new Intl.DateTimeFormat("en-US",{timeZone:fromZone,hour:"numeric",hour12:false,minute:"numeric"}).format(guess);
+  const toLocal = new Intl.DateTimeFormat("en-US",{timeZone:toZone,hour:"numeric",hour12:false,minute:"numeric"}).format(guess);
+  const [fh,fm] = fromLocal.split(":").map(Number);
+  const [th,tm] = toLocal.split(":").map(Number);
+  let diffH = (th - fh) + (tm - fm) / 60;
+  if (diffH > 12) diffH -= 24; if (diffH < -12) diffH += 24;
+  const sign = diffH >= 0 ? "+" : "";
+  const diffStr = Number.isInteger(diffH) ? `${sign}${diffH}` : `${sign}${diffH.toFixed(1)}`;
+  document.getElementById("tzDiffText").textContent = `${toName} is ${diffStr} hours from ${fromName}`;
+
+  document.getElementById("tzResult").style.display = "block";
+  setStatus("tzStatus","","ok");
+}
+
+// Close TZ dropdowns on outside click
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".tz-dropdown") && !e.target.matches("#tzFromSearch") && !e.target.matches("#tzToSearch")) {
+    document.querySelectorAll(".tz-dropdown").forEach(d=>d.classList.remove("open"));
+  }
+});
+
+// Init TZ with defaults
+tzSelect("from","America/New_York","New York");
+tzSelect("to","Europe/London","London");
+tzSetNow();
+
 // Init
 unitUpdateSelects();
 </script>
@@ -1358,7 +1627,7 @@ def sitemap():
 def llms_txt():
     text = """# Ayo's Converter
 
-> Free online file format converter supporting 19+ formats.
+> Free online file format converter supporting 20+ formats.
 
 ## Converters
 
@@ -1390,6 +1659,7 @@ def llms_txt():
 - Unit Converter: Convert length, weight, temperature, volume, area, speed, data
 - Color Converter: Convert between HEX, RGB, and HSL
 - Timestamp Tool: Parse and convert timestamps
+- Time Zone Converter: Convert time between cities worldwide
 """
     return Response(text, mimetype="text/plain; charset=utf-8")
 
