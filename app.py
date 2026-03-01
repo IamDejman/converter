@@ -1,8 +1,8 @@
 """
 Flask web UI for Ayo's Converter suite.
 
-Supported conversions (20 total):
-  Document/Text: JSON->Excel, Markdown->DOCX, Markdown->PDF, CSV->Excel, YAML->JSON, HTML->Markdown, PDF->Text
+Supported conversions (22 total):
+  Document/Text: JSON->Excel, Markdown->DOCX, Markdown->PDF, CSV->Excel, YAML->JSON, HTML->Markdown, PDF->Text, PDF->DOCX, DOCX->PDF
   Data: XML->JSON, SQL->CSV, CSV->JSON
   Image/Media: SVG->PNG (client), Image Resizer, Base64<->Image
   Developer Tools: JSON Formatter (client), TOML->JSON/YAML, Cron Parser
@@ -73,14 +73,14 @@ HTML = r"""<!DOCTYPE html>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Ayo's Converter - Free Online File Format Converter</title>
-  <meta name="description" content="Free online converter for JSON, CSV, YAML, XML, Markdown, PDF, images, and more. Convert between 20+ file formats instantly. No signup required." />
+  <meta name="description" content="Free online converter for JSON, CSV, YAML, XML, Markdown, PDF, images, and more. Convert between 22+ file formats instantly. No signup required." />
   <meta name="keywords" content="file converter, JSON to Excel, CSV to JSON, YAML to JSON, markdown to PDF, online converter, free converter" />
   <meta property="og:title" content="Ayo's Converter - Free Online File Format Converter" />
-  <meta property="og:description" content="Convert between 20+ file formats instantly. JSON, CSV, YAML, XML, Markdown, PDF, images and more." />
+  <meta property="og:description" content="Convert between 22+ file formats instantly. JSON, CSV, YAML, XML, Markdown, PDF, images and more." />
   <meta property="og:type" content="website" />
   <meta name="twitter:card" content="summary" />
   <meta name="twitter:title" content="Ayo's Converter" />
-  <meta name="twitter:description" content="Convert between 20+ file formats instantly." />
+  <meta name="twitter:description" content="Convert between 22+ file formats instantly." />
   <link rel="canonical" href="/" />
   <script type="application/ld+json">
   {
@@ -89,7 +89,7 @@ HTML = r"""<!DOCTYPE html>
     "name": "Ayo's Converter",
     "applicationCategory": "UtilitiesApplication",
     "operatingSystem": "Web",
-    "description": "Free online converter for 20+ file formats including JSON, CSV, YAML, XML, Markdown, PDF, images and more.",
+    "description": "Free online converter for 22+ file formats including JSON, CSV, YAML, XML, Markdown, PDF, images and more.",
     "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}
   }
   </script>
@@ -287,7 +287,7 @@ HTML = r"""<!DOCTYPE html>
 
 <header class="app-header">
   <h1>Ayo's Converter</h1>
-  <p>20 free online converters &mdash; no signup required</p>
+  <p>22 free online converters &mdash; no signup required</p>
 </header>
 
 <!-- Mobile dropdown -->
@@ -300,6 +300,8 @@ HTML = r"""<!DOCTYPE html>
     <option value="yaml-json">YAML &rarr; JSON</option>
     <option value="html-md">HTML &rarr; Markdown</option>
     <option value="pdf-text">PDF &rarr; Text</option>
+    <option value="pdf-docx">PDF &rarr; DOCX</option>
+    <option value="docx-pdf">DOCX &rarr; PDF</option>
   </optgroup>
   <optgroup label="Data">
     <option value="xml-json">XML &rarr; JSON</option>
@@ -334,6 +336,8 @@ HTML = r"""<!DOCTYPE html>
     <a class="sidebar-item" onclick="switchConverter('yaml-json')">YAML &rarr; JSON</a>
     <a class="sidebar-item" onclick="switchConverter('html-md')">HTML &rarr; Markdown</a>
     <a class="sidebar-item" onclick="switchConverter('pdf-text')">PDF &rarr; Text</a>
+    <a class="sidebar-item" onclick="switchConverter('pdf-docx')">PDF &rarr; DOCX</a>
+    <a class="sidebar-item" onclick="switchConverter('docx-pdf')">DOCX &rarr; PDF</a>
   </div>
   <div class="sidebar-category"><h3>Data</h3>
     <a class="sidebar-item" onclick="switchConverter('xml-json')">XML &rarr; JSON</a>
@@ -516,6 +520,46 @@ HTML = r"""<!DOCTYPE html>
       <button class="btn btn-green" onclick="downloadText('pdfOutput','extracted.txt','text/plain')">Download .txt</button>
     </div>
     <pre class="output-box" id="pdfOutput"></pre>
+  </div>
+</div>
+
+<!-- ═══════════════════ PDF → DOCX ═══════════════════ -->
+<div class="panel" id="panel-pdf-docx">
+  <h2>PDF &rarr; DOCX</h2>
+  <p style="font-size:0.85rem;color:#656d76;margin-bottom:12px">Extract text from a PDF and save as a Word document.</p>
+  <div class="file-row">
+    <input type="file" id="pdfDocxFile" accept=".pdf"/>
+    <label for="pdfDocxFile" class="file-label">Choose PDF file</label>
+    <span class="file-name" id="pdfDocxFileName"></span>
+  </div>
+  <div class="btn-row">
+    <button class="btn btn-primary" onclick="pdfDocxConvert()">Convert to DOCX</button>
+    <span class="spinner" id="pdfDocxSpinner"></span>
+  </div>
+  <div class="status" id="pdfDocxStatus"></div>
+  <div class="preview" id="pdfDocxPreview" style="display:none">
+    <button class="btn btn-green" onclick="pdfDocxDownload()">Download .docx</button>
+    <pre class="output-box" id="pdfDocxOutput"></pre>
+  </div>
+</div>
+
+<!-- ═══════════════════ DOCX → PDF ═══════════════════ -->
+<div class="panel" id="panel-docx-pdf">
+  <h2>DOCX &rarr; PDF</h2>
+  <p style="font-size:0.85rem;color:#656d76;margin-bottom:12px">Convert a Word document to PDF with proper formatting.</p>
+  <div class="file-row">
+    <input type="file" id="docxPdfFile" accept=".docx"/>
+    <label for="docxPdfFile" class="file-label">Choose .docx file</label>
+    <span class="file-name" id="docxPdfFileName"></span>
+  </div>
+  <div class="btn-row">
+    <button class="btn btn-primary" onclick="docxPdfConvert()">Convert to PDF</button>
+    <span class="spinner" id="docxPdfSpinner"></span>
+  </div>
+  <div class="status" id="docxPdfStatus"></div>
+  <div class="preview" id="docxPdfPreview" style="display:none">
+    <button class="btn btn-green" onclick="docxPdfDownload()">Download .pdf</button>
+    <pre class="output-box" id="docxPdfOutput"></pre>
   </div>
 </div>
 
@@ -820,7 +864,7 @@ HTML = r"""<!DOCTYPE html>
 </section>
 </main>
 
-<footer>Ayo's Converter &mdash; 20 free converters, no signup required.</footer>
+<footer>Ayo's Converter &mdash; 22 free converters, no signup required.</footer>
 
 <script>
 // ═══════════════════════════════════════════════════════════════
@@ -1030,6 +1074,56 @@ async function pdfExtract() {
   } catch(e) { setStatus("pdfStatus",e.message,"err"); }
   showSpin("pdfSpinner",false);
 }
+
+// ═══════════════════════════════════════════════════════════════
+// PDF → DOCX
+// ═══════════════════════════════════════════════════════════════
+let _pdfDocxBlob = null;
+async function pdfDocxConvert() {
+  const fileInput = document.getElementById("pdfDocxFile");
+  if (!fileInput.files[0]) { setStatus("pdfDocxStatus","Choose a PDF first.","err"); return; }
+  document.getElementById("pdfDocxFileName").textContent = fileInput.files[0].name;
+  setStatus("pdfDocxStatus","Converting...","info"); showSpin("pdfDocxSpinner",true);
+  try {
+    const fd = new FormData(); fd.append("file", fileInput.files[0]);
+    const res = await fetch("/pdf/to-docx", { method:"POST", body: fd });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error||"Server error"); }
+    _pdfDocxBlob = await res.blob();
+    // Also extract text for preview
+    const fd2 = new FormData(); fd2.append("file", fileInput.files[0]);
+    const res2 = await fetch("/pdf/extract", { method:"POST", body: fd2 });
+    if (res2.ok) { const d2 = await res2.json(); document.getElementById("pdfDocxOutput").textContent = d2.text; }
+    document.getElementById("pdfDocxPreview").style.display = "block";
+    setStatus("pdfDocxStatus","Converted","ok");
+  } catch(e) { setStatus("pdfDocxStatus",e.message,"err"); }
+  showSpin("pdfDocxSpinner",false);
+}
+function pdfDocxDownload() { if (_pdfDocxBlob) downloadBlob(_pdfDocxBlob, "converted.docx"); }
+
+// ═══════════════════════════════════════════════════════════════
+// DOCX → PDF
+// ═══════════════════════════════════════════════════════════════
+let _docxPdfBlob = null;
+async function docxPdfConvert() {
+  const fileInput = document.getElementById("docxPdfFile");
+  if (!fileInput.files[0]) { setStatus("docxPdfStatus","Choose a .docx file first.","err"); return; }
+  document.getElementById("docxPdfFileName").textContent = fileInput.files[0].name;
+  setStatus("docxPdfStatus","Converting...","info"); showSpin("docxPdfSpinner",true);
+  try {
+    const fd = new FormData(); fd.append("file", fileInput.files[0]);
+    const res = await fetch("/docx/to-pdf", { method:"POST", body: fd });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error||"Server error"); }
+    _docxPdfBlob = await res.blob();
+    // Also extract text for preview
+    const fd2 = new FormData(); fd2.append("file", fileInput.files[0]);
+    const res2 = await fetch("/docx/extract-text", { method:"POST", body: fd2 });
+    if (res2.ok) { const d2 = await res2.json(); document.getElementById("docxPdfOutput").textContent = d2.text; }
+    document.getElementById("docxPdfPreview").style.display = "block";
+    setStatus("docxPdfStatus","Converted","ok");
+  } catch(e) { setStatus("docxPdfStatus",e.message,"err"); }
+  showSpin("docxPdfSpinner",false);
+}
+function docxPdfDownload() { if (_docxPdfBlob) downloadBlob(_docxPdfBlob, "converted.pdf"); }
 
 // ═══════════════════════════════════════════════════════════════
 // XML → JSON
@@ -1635,10 +1729,12 @@ _CONVERTER_SEO = {
     "color": ("Color Converter", "Convert between HEX, RGB, and HSL color formats online for free. Live color preview swatch. No signup required."),
     "timestamp": ("Timestamp Converter", "Convert Unix timestamps, ISO dates, and human-readable dates online for free. Parse any date format to all others instantly."),
     "timezone": ("Time Zone Converter", "Convert time between 150+ cities worldwide. Search by city name, see time difference. Free online time zone converter. No signup."),
+    "pdf-docx": ("PDF to DOCX Converter", "Convert PDF to Word DOCX online for free. Extract text from PDF and save as editable Word document. Download .docx instantly. No signup."),
+    "docx-pdf": ("DOCX to PDF Converter", "Convert Word DOCX to PDF online for free. Preserves headings, bold, italic formatting. Download PDF with proper fonts instantly. No signup."),
 }
 
 _DEFAULT_TITLE = "Ayo's Converter - Free Online File Format Converter"
-_DEFAULT_DESC = "Free online converter for JSON, CSV, YAML, XML, Markdown, PDF, images, and more. Convert between 20+ file formats instantly. No signup required."
+_DEFAULT_DESC = "Free online converter for JSON, CSV, YAML, XML, Markdown, PDF, images, and more. Convert between 22+ file formats instantly. No signup required."
 
 
 def _inject_seo(html, converter_id):
@@ -1655,7 +1751,7 @@ def _inject_seo(html, converter_id):
             'content="Ayo\'s Converter - Free Online File Format Converter"',
             f'content="{full_title}"', 1)
         page = page.replace(
-            'content="Convert between 20+ file formats instantly. JSON, CSV, YAML, XML, Markdown, PDF, images and more."',
+            'content="Convert between 22+ file formats instantly. JSON, CSV, YAML, XML, Markdown, PDF, images and more."',
             f'content="{desc}"', 1)
         page = page.replace('href="/"', f'href="/{converter_id}"', 1)
     return page
@@ -1675,7 +1771,7 @@ def converter_page(converter_id):
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok", "converters": 20})
+    return jsonify({"status": "ok", "converters": 22})
 
 
 @app.route("/robots.txt")
@@ -1699,7 +1795,7 @@ def llms_txt():
     host = request.host_url.rstrip("/")
     text = f"""# Ayo's Converter
 
-> Free online file format converter supporting 20 converters across 5 categories.
+> Free online file format converter supporting 22 converters across 5 categories.
 > No signup, no ads, no file size gimmicks. All conversions run instantly.
 
 ## URL: {host}
@@ -1714,6 +1810,8 @@ def llms_txt():
 - YAML to JSON ({host}/yaml-json): Convert YAML documents to formatted JSON. Supports nested structures, arrays, and all YAML types.
 - HTML to Markdown ({host}/html-md): Convert HTML to clean, readable Markdown. Preserves links, images, tables, and formatting.
 - PDF to Text Extractor ({host}/pdf-text): Extract text content from PDF files. Upload PDF, get plain text. Copy or download as .txt.
+- PDF to DOCX ({host}/pdf-docx): Convert PDF to editable Word DOCX. Extracts text and creates a properly formatted Word document.
+- DOCX to PDF ({host}/docx-pdf): Convert Word DOCX to PDF. Preserves headings, bold, italic formatting with Liberation Serif font.
 
 ### Data
 - XML to JSON ({host}/xml-json): Convert XML documents to JSON. Also supports download as Excel (.xlsx).
@@ -1908,6 +2006,71 @@ def pdf_extract():
         text = pdf_to_text(pdf_bytes)
     except Exception as exc:
         return jsonify({"error": f"PDF extraction failed: {exc}"}), 400
+    return jsonify({"text": text})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Routes — PDF → DOCX
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/pdf/to-docx", methods=["POST"])
+@limiter.limit("20 per hour")
+def pdf_to_docx():
+    from converters.doc_converter import pdf_to_docx_bytes
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    file = request.files["file"]
+    if not file.filename.lower().endswith(".pdf"):
+        return jsonify({"error": "File must be a PDF"}), 400
+    try:
+        docx_bytes = pdf_to_docx_bytes(file.read())
+    except Exception as exc:
+        return jsonify({"error": f"Conversion failed: {exc}"}), 400
+    return send_file(
+        io.BytesIO(docx_bytes),
+        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        as_attachment=True,
+        download_name="converted.docx",
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Routes — DOCX → PDF
+# ═══════════════════════════════════════════════════════════════════════════
+
+@app.route("/docx/to-pdf", methods=["POST"])
+@limiter.limit("20 per hour")
+def docx_to_pdf():
+    from converters.doc_converter import docx_to_pdf_bytes
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    file = request.files["file"]
+    if not file.filename.lower().endswith(".docx"):
+        return jsonify({"error": "File must be a .docx"}), 400
+    try:
+        pdf_bytes = docx_to_pdf_bytes(file.read())
+    except Exception as exc:
+        return jsonify({"error": f"Conversion failed: {exc}"}), 400
+    return send_file(
+        io.BytesIO(pdf_bytes),
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name="converted.pdf",
+    )
+
+
+@app.route("/docx/extract-text", methods=["POST"])
+def docx_extract_text():
+    """Extract plain text from DOCX for preview."""
+    from docx import Document as _Doc
+    if "file" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+    file = request.files["file"]
+    try:
+        doc = _Doc(io.BytesIO(file.read()))
+        text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+    except Exception as exc:
+        return jsonify({"error": f"DOCX read failed: {exc}"}), 400
     return jsonify({"text": text})
 
 
