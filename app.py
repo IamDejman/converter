@@ -113,47 +113,61 @@ HTML = r"""<!DOCTYPE html>
     .app-header p  { margin-top: 4px; color: #656d76; font-size: 0.85rem; }
 
     .app-layout {
-      display: grid;
-      grid-template-columns: 220px 1fr;
       min-height: calc(100vh - 80px);
     }
 
-    /* ── Sidebar ───────────────────────────────────────────── */
-    .sidebar {
+    /* ── Top Nav ───────────────────────────────────────────── */
+    .topnav {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      padding: 0 16px;
       background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
-      border-right: 1px solid #e2e8f0;
-      padding: 20px 0;
-      overflow-y: auto;
+      border-bottom: 1px solid #e2e8f0;
+      position: relative;
+      flex-wrap: wrap;
     }
-    .sidebar-category { margin-bottom: 6px; }
-    .sidebar-category h3 {
-      font-size: 0.68rem; font-weight: 700; text-transform: uppercase;
-      letter-spacing: 1px; color: #94a3b8; padding: 10px 20px 6px;
+    .nav-category {
+      position: relative;
     }
-    .sidebar-item {
-      display: block;
-      padding: 9px 16px 9px 20px; cursor: pointer;
-      font-size: 0.84rem; color: #475569; text-decoration: none;
-      border-radius: 0 24px 24px 0; margin-right: 12px;
+    .nav-category-btn {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 12px 16px; cursor: pointer;
+      font-family: inherit; font-size: 0.84rem; font-weight: 600;
+      color: #475569; background: none; border: none;
+      border-bottom: 2px solid transparent;
       transition: all 0.2s ease;
-      border-left: 3px solid transparent;
     }
-    .sidebar-item:hover {
-      background: #e2e8f0; color: #1e293b;
+    .nav-category-btn:hover { color: #1e293b; background: #e2e8f0; }
+    .nav-category-btn.has-active { color: #1d4ed8; border-bottom-color: #3b82f6; }
+    .nav-category-btn .arrow { font-size: 0.6rem; transition: transform 0.2s; }
+    .nav-category.open .arrow { transform: rotate(180deg); }
+    .nav-dropdown {
+      display: none;
+      position: absolute; top: 100%; left: 0; z-index: 100;
+      background: #fff; border: 1px solid #e2e8f0; border-radius: 0 0 10px 10px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.10);
+      min-width: 210px; padding: 6px 0;
     }
-    .sidebar-item.active {
+    .nav-category.open .nav-dropdown { display: block; }
+    .nav-item {
+      display: block; padding: 9px 18px; cursor: pointer;
+      font-size: 0.84rem; color: #475569; text-decoration: none;
+      transition: all 0.15s ease;
+    }
+    .nav-item:hover { background: #eff6ff; color: #1d4ed8; }
+    .nav-item.active {
       background: linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%);
       color: #1d4ed8; font-weight: 600;
-      border-left-color: #3b82f6;
-      box-shadow: 0 1px 3px rgba(59,130,246,.15);
     }
 
-    .mobile-select { display: none; width: 100%; padding: 10px; font-size: 1rem; font-family: inherit; margin-bottom: 12px; border: 1px solid #d1d9e0; border-radius: 8px; }
+    .mobile-select { display: none; width: 100%; padding: 10px; font-size: 1rem; font-family: inherit; border: 1px solid #d1d9e0; border-radius: 8px; background: #fff; margin: 0 16px; max-width: calc(100% - 32px); }
 
     /* ── Content ───────────────────────────────────────────── */
     .content {
       padding: 24px 32px 80px;
       max-width: 900px;
+      margin: 0 auto;
     }
 
     .panel { display: none; }
@@ -275,8 +289,7 @@ HTML = r"""<!DOCTYPE html>
 
     /* ── Responsive ────────────────────────────────────────── */
     @media (max-width: 768px) {
-      .app-layout { grid-template-columns: 1fr; }
-      .sidebar { display: none; }
+      .topnav { display: none; }
       .mobile-select { display: block; }
       .content { padding: 16px; }
       .color-inputs { grid-template-columns: 1fr; }
@@ -326,41 +339,57 @@ HTML = r"""<!DOCTYPE html>
   </optgroup>
 </select>
 
-<main class="app-layout">
-<nav class="sidebar">
-  <div class="sidebar-category"><h3>Document / Text</h3>
-    <a class="sidebar-item active" onclick="switchConverter('json')">JSON &rarr; Excel</a>
-    <a class="sidebar-item" onclick="switchConverter('md-docx')">Markdown &rarr; DOCX</a>
-    <a class="sidebar-item" onclick="switchConverter('md-pdf')">Markdown &rarr; PDF</a>
-    <a class="sidebar-item" onclick="switchConverter('csv-excel')">CSV &rarr; Excel</a>
-    <a class="sidebar-item" onclick="switchConverter('yaml-json')">YAML &rarr; JSON</a>
-    <a class="sidebar-item" onclick="switchConverter('html-md')">HTML &rarr; Markdown</a>
-    <a class="sidebar-item" onclick="switchConverter('pdf-text')">PDF &rarr; Text</a>
-    <a class="sidebar-item" onclick="switchConverter('pdf-docx')">PDF &rarr; DOCX</a>
-    <a class="sidebar-item" onclick="switchConverter('docx-pdf')">DOCX &rarr; PDF</a>
+<nav class="topnav">
+  <div class="nav-category" data-cat="doc">
+    <button class="nav-category-btn has-active" onclick="toggleCat(this)">Document / Text <span class="arrow">&#9662;</span></button>
+    <div class="nav-dropdown">
+      <a class="nav-item active" onclick="navPick('json',this)">JSON &rarr; Excel</a>
+      <a class="nav-item" onclick="navPick('md-docx',this)">Markdown &rarr; DOCX</a>
+      <a class="nav-item" onclick="navPick('md-pdf',this)">Markdown &rarr; PDF</a>
+      <a class="nav-item" onclick="navPick('csv-excel',this)">CSV &rarr; Excel</a>
+      <a class="nav-item" onclick="navPick('yaml-json',this)">YAML &rarr; JSON</a>
+      <a class="nav-item" onclick="navPick('html-md',this)">HTML &rarr; Markdown</a>
+      <a class="nav-item" onclick="navPick('pdf-text',this)">PDF &rarr; Text</a>
+      <a class="nav-item" onclick="navPick('pdf-docx',this)">PDF &rarr; DOCX</a>
+      <a class="nav-item" onclick="navPick('docx-pdf',this)">DOCX &rarr; PDF</a>
+    </div>
   </div>
-  <div class="sidebar-category"><h3>Data</h3>
-    <a class="sidebar-item" onclick="switchConverter('xml-json')">XML &rarr; JSON</a>
-    <a class="sidebar-item" onclick="switchConverter('sql-csv')">SQL &rarr; CSV</a>
-    <a class="sidebar-item" onclick="switchConverter('csv-json')">CSV &rarr; JSON</a>
+  <div class="nav-category" data-cat="data">
+    <button class="nav-category-btn" onclick="toggleCat(this)">Data <span class="arrow">&#9662;</span></button>
+    <div class="nav-dropdown">
+      <a class="nav-item" onclick="navPick('xml-json',this)">XML &rarr; JSON</a>
+      <a class="nav-item" onclick="navPick('sql-csv',this)">SQL &rarr; CSV</a>
+      <a class="nav-item" onclick="navPick('csv-json',this)">CSV &rarr; JSON</a>
+    </div>
   </div>
-  <div class="sidebar-category"><h3>Image / Media</h3>
-    <a class="sidebar-item" onclick="switchConverter('svg-png')">SVG &rarr; PNG</a>
-    <a class="sidebar-item" onclick="switchConverter('image-resize')">Image Resizer</a>
-    <a class="sidebar-item" onclick="switchConverter('base64-image')">Base64 &harr; Image</a>
+  <div class="nav-category" data-cat="image">
+    <button class="nav-category-btn" onclick="toggleCat(this)">Image / Media <span class="arrow">&#9662;</span></button>
+    <div class="nav-dropdown">
+      <a class="nav-item" onclick="navPick('svg-png',this)">SVG &rarr; PNG</a>
+      <a class="nav-item" onclick="navPick('image-resize',this)">Image Resizer</a>
+      <a class="nav-item" onclick="navPick('base64-image',this)">Base64 &harr; Image</a>
+    </div>
   </div>
-  <div class="sidebar-category"><h3>Developer Tools</h3>
-    <a class="sidebar-item" onclick="switchConverter('json-format')">JSON Formatter</a>
-    <a class="sidebar-item" onclick="switchConverter('toml-json')">TOML &rarr; JSON/YAML</a>
-    <a class="sidebar-item" onclick="switchConverter('cron-human')">Cron Parser</a>
+  <div class="nav-category" data-cat="dev">
+    <button class="nav-category-btn" onclick="toggleCat(this)">Developer Tools <span class="arrow">&#9662;</span></button>
+    <div class="nav-dropdown">
+      <a class="nav-item" onclick="navPick('json-format',this)">JSON Formatter</a>
+      <a class="nav-item" onclick="navPick('toml-json',this)">TOML &rarr; JSON/YAML</a>
+      <a class="nav-item" onclick="navPick('cron-human',this)">Cron Parser</a>
+    </div>
   </div>
-  <div class="sidebar-category"><h3>Everyday Use</h3>
-    <a class="sidebar-item" onclick="switchConverter('unit')">Unit Converter</a>
-    <a class="sidebar-item" onclick="switchConverter('color')">Color Converter</a>
-    <a class="sidebar-item" onclick="switchConverter('timestamp')">Timestamp Tool</a>
-    <a class="sidebar-item" onclick="switchConverter('timezone')">Time Zone Converter</a>
+  <div class="nav-category" data-cat="every">
+    <button class="nav-category-btn" onclick="toggleCat(this)">Everyday Use <span class="arrow">&#9662;</span></button>
+    <div class="nav-dropdown">
+      <a class="nav-item" onclick="navPick('unit',this)">Unit Converter</a>
+      <a class="nav-item" onclick="navPick('color',this)">Color Converter</a>
+      <a class="nav-item" onclick="navPick('timestamp',this)">Timestamp Tool</a>
+      <a class="nav-item" onclick="navPick('timezone',this)">Time Zone Converter</a>
+    </div>
   </div>
 </nav>
+
+<main class="app-layout">
 
 <section class="content">
 
@@ -903,14 +932,43 @@ function showSpin(id, on) { document.getElementById(id).style.display = on ? "in
 // ═══════════════════════════════════════════════════════════════
 // Navigation
 // ═══════════════════════════════════════════════════════════════
+function toggleCat(btn) {
+  const cat = btn.parentElement;
+  const wasOpen = cat.classList.contains("open");
+  // Close all dropdowns first
+  document.querySelectorAll(".nav-category").forEach(c => c.classList.remove("open"));
+  if (!wasOpen) cat.classList.add("open");
+}
+
+// Close dropdown when clicking outside
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".nav-category")) {
+    document.querySelectorAll(".nav-category").forEach(c => c.classList.remove("open"));
+  }
+});
+
+function navPick(id, el) {
+  switchConverter(id);
+  // Close dropdown
+  document.querySelectorAll(".nav-category").forEach(c => c.classList.remove("open"));
+}
+
 function switchConverter(id) {
   document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
-  document.querySelectorAll(".sidebar-item").forEach(s => s.classList.remove("active"));
   const panel = document.getElementById("panel-" + id);
   if (panel) panel.classList.add("active");
-  document.querySelectorAll(".sidebar-item").forEach(s => {
-    if (s.getAttribute("onclick") && s.getAttribute("onclick").includes("'" + id + "'")) s.classList.add("active");
+
+  // Update nav active states
+  document.querySelectorAll(".nav-item").forEach(s => s.classList.remove("active"));
+  document.querySelectorAll(".nav-category-btn").forEach(b => b.classList.remove("has-active"));
+  document.querySelectorAll(".nav-item").forEach(s => {
+    if (s.getAttribute("onclick") && s.getAttribute("onclick").includes("'" + id + "'")) {
+      s.classList.add("active");
+      const catBtn = s.closest(".nav-category").querySelector(".nav-category-btn");
+      if (catBtn) catBtn.classList.add("has-active");
+    }
   });
+
   document.querySelector(".mobile-select").value = id;
   if (location.pathname !== "/" + id) history.pushState(null, "", "/" + id);
 }
